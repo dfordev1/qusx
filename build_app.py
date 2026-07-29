@@ -1,0 +1,1315 @@
+import json
+
+surah_index = json.load(open('/home/claude/surah_index.json'))  # 114 entries: num, name, nameArabic, ayahCount
+surah_index_json = json.dumps(surah_index, ensure_ascii=False)
+
+# QPC V2 glyph data (Tarteel QUL, "QPC V2 Glyph - Word by Word"): for each
+# surah:ayah, an array of per-word glyph characters in the KFGQPC V2 mushaf
+# font's private-use-area encoding — position N is QUSX word position N,
+# and the trailing extra entry (beyond QUSX's real word count) is the
+# ornamental ayah-end number glyph baked into the font itself, matching a
+# real mushaf page rather than our own drawn ayah-pin circle.
+glyph_v2_json = open('/home/claude/qpc_v2_glyphs.json', encoding='utf-8').read()
+
+# All 36 reciter configs available in the QUA dataset (hetchyy/quranic-
+# universal-ayahs), with a readable display name for each — the raw HF
+# config slugs are source-tagged machine names (e.g. "..._mp3quran",
+# "..._tarteel", "..._qdc"), not meant for display.
+reciters = json.load(open('/home/claude/reciters.json'))
+reciters_json = json.dumps(reciters, ensure_ascii=False)
+
+html = """<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Qur'an Follow-Along — Letter Highlighting</title>
+<style>
+  :root {
+    --bg: #0c0e13;
+    --surface: #171b24;
+    --surface-2: #1d222d;
+    --border: #2b3140;
+    --text: #ece9e2;
+    --text-muted: #838a9c;
+    --accent: #e8bf3f;
+    --accent-2: #d99a3d;
+    --accent-soft: rgba(232, 191, 63, 0.16);
+    --shadow: 0 10px 30px rgba(0,0,0,0.35);
+  }
+  /* The real Uthmani Quranic script (QPC "Uthmanic Hafs"), NOT the QCF
+     glyph-per-word mushaf font used in Mushaf mode — this is a normal
+     Unicode font (one file, full cmap + contextual joining), so it's the
+     right choice for Letter/Word modes where text still needs to be
+     split into individual per-letter spans for highlighting. The QCF
+     glyph fonts can't do that: each of their "characters" IS an entire
+     precomposed word, with no individual letters to select. */
+  @font-face {
+    font-family: 'UthmanicHafs';
+    src: url('https://verses.quran.foundation/fonts/quran/hafs/uthmanic_hafs/UthmanicHafs1Ver18.woff2') format('woff2');
+    font-display: swap;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(ellipse 900px 500px at 50% -10%, rgba(232,191,63,0.06), transparent),
+      var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 28px 16px 140px;
+  }
+  h1 {
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    margin: 0 0 4px;
+    background: linear-gradient(90deg, var(--text-muted), var(--accent), var(--text-muted));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .subtitle { color: var(--text-muted); font-size: 13px; margin-bottom: 28px; text-align: center;}
+  .subtitle a { color: var(--accent); text-decoration: none; }
+  .verses {
+    width: 100%;
+    max-width: 760px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .verse {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 22px 24px;
+    box-shadow: var(--shadow);
+    transition: border-color 0.2s, transform 0.15s;
+    cursor: pointer;
+    direction: rtl;
+  }
+  .verse:hover { transform: translateY(-1px); }
+  .verse.active { border-color: var(--accent); }
+  .verse-num {
+    display: inline-block;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: monospace;
+    margin-bottom: 10px;
+    direction: ltr;
+  }
+
+  /* QUSX milestone-pin styling — matches usxv2/viewer/viewer.html's own
+     visual convention (a rule + label marking where a boundary axis
+     actually falls, and an inline circular pin for the ayah marker) rather
+     than a flat text label bolted onto the verse number. juz/hizb/rub/page
+     are boundary axes, not per-ayah facts, so they render as BREAKS between
+     verses (only when the value actually changes), not repeated on every
+     single verse. */
+  .qusx-break {
+    direction: ltr;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 4px 10px;
+    width: 100%;
+    max-width: 760px;
+  }
+  .qusx-break .ln { flex: 1; height: 1px; background: var(--border); }
+  .qusx-break .lbl {
+    font-family: monospace;
+    font-size: 10px;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .qusx-break.page .lbl { color: var(--accent); }
+  .ayah-pin {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.6em;
+    height: 1.6em;
+    margin: 0 0.3em;
+    border: 1.3px solid var(--accent);
+    border-radius: 50%;
+    font-family: monospace;
+    font-size: 0.4em;
+    color: var(--accent);
+    vertical-align: 0.18em;
+  }
+  .qusx-ruku {
+    direction: ltr;
+    width: 100%;
+    max-width: 760px;
+    text-align: center;
+    margin: 2px 4px 8px;
+    font-family: monospace;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    opacity: 0.7;
+  }
+  .bismillah {
+    width: 100%;
+    max-width: 760px;
+    text-align: center;
+    font-family: 'UthmanicHafs', "Traditional Arabic", "Scheherazade New", serif;
+    font-size: 24px;
+    color: var(--accent);
+    margin: 4px 4px 16px;
+  }
+  .qusx-line-break { flex-basis: 100%; height: 0; }
+  .sajda-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: monospace;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    background: var(--accent-soft);
+    margin-left: 8px;
+    direction: ltr;
+  }
+  .verse-text {
+    font-family: 'UthmanicHafs', "Traditional Arabic", "Scheherazade New", serif;
+    font-size: 34px;
+    line-height: 2.3;
+    letter-spacing: 0.01em;
+  }
+  /* Mushaf mode: real KFGQPC V2 mushaf font (one precomposed glyph per
+     word, per-page font file — loaded dynamically per page number), the
+     same edition QUSX's own `layout` attribute references — rendered as
+     ONE CONTINUOUS FLOWING PAGE, not per-verse cards: a real mushaf has no
+     visual break between verses, so words from consecutive ayahs share
+     the same line right up to QUSX's actual line-break positions.
+     NOT justified edge-to-edge: real mushaf pages get that by stretching
+     the letters themselves (kashida), which needs a dedicated shaping
+     engine we don't have. Plain CSS `justify` can only stretch by adding
+     blank space between words, which on a short 4-6-word line blows huge
+     ugly gaps — worse than just letting the line sit at its natural width. */
+  .mushaf-pages {
+    display: none;
+    width: 100%;
+    max-width: 760px;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .mushaf-page {
+    background: linear-gradient(180deg, var(--surface-2), var(--surface));
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 22px 26px 28px;
+    box-shadow: var(--shadow);
+  }
+  .mushaf-page-header {
+    direction: ltr;
+    text-align: center;
+    font-family: monospace;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 14px;
+  }
+  .mushaf-text {
+    direction: rtl;
+    font-size: 30px;
+    line-height: 2.2;
+    letter-spacing: 0;
+    text-align: start;
+  }
+  .mushaf-line { display: block; }
+  .mushaf-glyph {
+    display: inline;
+    border-radius: 6px;
+    padding: 2px 4px;
+    margin: 0 1px;
+    transition: background 0.15s;
+    cursor: pointer;
+  }
+  .mushaf-glyph.active-word { background: var(--accent-soft); }
+  .mushaf-num-glyph { display: inline; color: var(--accent); margin: 0 2px; }
+  .letter { transition: color 0.08s, text-shadow 0.08s; }
+  .letter.lit { color: var(--accent); text-shadow: 0 0 14px var(--accent-soft); }
+  .word {
+    display: inline; /* NOT inline-flex/inline-block — those break Arabic cursive glyph shaping across sibling letter spans */
+    border-radius: 8px;
+    padding: 4px 2px;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+    transition: box-shadow 0.15s, background 0.15s;
+  }
+  .word:hover { box-shadow: 0 0 0 1px var(--border); }
+  .word.active-word {
+    background: var(--accent-soft);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .controls {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: rgba(15,17,21,0.92);
+    backdrop-filter: blur(12px);
+    border-top: 1px solid var(--border);
+    padding: 10px 20px 14px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+  .scrubber {
+    display: flex;
+    gap: 6px;
+    width: 100%;
+    max-width: 760px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+  .scrubber::-webkit-scrollbar { height: 4px; }
+  .scrub-btn {
+    flex: 1;
+    min-width: 34px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    border-radius: 8px;
+    padding: 6px 4px;
+    font-size: 11px;
+    font-family: monospace;
+    cursor: pointer;
+    text-align: center;
+    white-space: nowrap;
+  }
+  .scrub-btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  .controls-row { display: flex; align-items: center; gap: 14px; width: 100%; max-width: 760px; }
+  .info-bar { display: flex; align-items: center; gap: 10px; min-width: 150px; }
+  .info-avatar {
+    width: 30px; height: 30px; border-radius: 50%;
+    background: var(--accent-soft); color: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; flex-shrink: 0;
+  }
+  .info-text { line-height: 1.25; }
+  .info-name { font-size: 12px; font-weight: 600; }
+  .info-meta { font-size: 10.5px; color: var(--text-muted); }
+  button.play-btn {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #1a1508;
+    border: none;
+    border-radius: 50%;
+    width: 46px; height: 46px;
+    font-size: 18px;
+    cursor: pointer;
+    flex-shrink: 0;
+    box-shadow: 0 4px 16px rgba(232,191,63,0.35);
+    display: flex; align-items: center; justify-content: center;
+    transition: transform 0.12s;
+  }
+  button.play-btn:hover { transform: scale(1.05); }
+  button.play-btn:active { transform: scale(0.96); }
+  input[type=range] { flex: 1; accent-color: var(--accent); }
+  .time { font-family: monospace; font-size: 12px; color: var(--text-muted); min-width: 42px; text-align: center; }
+  .mode-toggle { display: flex; gap: 6px; font-size: 12px; flex-shrink: 0; }
+  .mode-toggle button {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    border-radius: 20px;
+    padding: 5px 12px;
+    cursor: pointer;
+  }
+  .mode-toggle button.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+  .tajweed-btn.on { color: #4fd17a; border-color: #4fd17a; background: rgba(79,209,122,0.14); }
+  .tajweed-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .credit { color: var(--text-muted); font-size: 11px; margin-top: 22px; text-align: center; max-width: 600px; line-height: 1.6; }
+  .credit a { color: var(--accent); }
+
+  .browse-bar {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    width: 100%;
+    max-width: 760px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px 16px;
+  }
+  .browse-bar.on { display: flex; }
+  .browse-step {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    width: 34px; height: 34px;
+    font-size: 15px;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .browse-step:hover { border-color: var(--accent); color: var(--accent); }
+  .browse-letter {
+    font-family: 'UthmanicHafs', "Traditional Arabic", "Scheherazade New", serif;
+    font-size: 40px;
+    color: var(--accent);
+    min-width: 60px;
+    text-align: center;
+  }
+  .browse-meta { font-size: 11px; color: var(--text-muted); font-family: monospace; text-align: center; flex: 1; }
+
+  .word.has-morph { cursor: help; }
+  .morph-tip {
+    position: fixed;
+    z-index: 50;
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 13px;
+    color: var(--text);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.12s;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    max-width: 240px;
+    direction: rtl;
+  }
+  .morph-tip.show { opacity: 1; }
+  .morph-tip .mt-row { display: flex; justify-content: space-between; gap: 12px; margin-top: 4px; direction: ltr; }
+  .morph-tip .mt-label { color: var(--text-muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .morph-tip .mt-arabic { font-family: 'UthmanicHafs', "Traditional Arabic", "Scheherazade New", serif; font-size: 18px; }
+
+  .surah-picker {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 6px;
+  }
+  .surah-picker select {
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-size: 13px;
+    max-width: 260px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .surah-picker select:hover, .surah-picker select:focus { border-color: var(--accent); outline: none; }
+  .load-status {
+    color: var(--text-muted);
+    font-size: 12px;
+    min-height: 16px;
+    margin-bottom: 18px;
+  }
+  .load-status.error { color: #e05858; }
+</style>
+</head>
+<body>
+
+<h1>Qur'an &middot; Follow Along</h1>
+<div class="surah-picker">
+  <select id="surahSelect"></select>
+  <select id="reciterSelect"></select>
+</div>
+<div class="load-status" id="loadStatus">&nbsp;</div>
+<div class="subtitle">data from <a href="https://huggingface.co/datasets/hetchyy/quranic-universal-ayahs" target="_blank">Qur'anic Universal Audio</a> (36 reciters) &middot; text &amp; word morphology from <a href="https://github.com/dfordev1/usxv2" target="_blank">QUSX</a> &middot; Mushaf glyphs &amp; tajweed colors from <a href="https://qul.tarteel.ai" target="_blank">Tarteel QUL</a></div>
+
+<div class="verses" id="verses"></div>
+<div class="mushaf-pages" id="mushafPages"></div>
+<div class="morph-tip" id="morphTip"></div>
+
+<div class="controls">
+  <div class="scrubber" id="scrubber"></div>
+  <div class="browse-bar" id="browseBar">
+    <button class="browse-step" id="browsePrev">&#8592;</button>
+    <span class="browse-letter" id="browseLetter">&nbsp;</span>
+    <span class="browse-meta" id="browseMeta">letter 1 / 1</span>
+    <button class="browse-step" id="browseNext">&#8594;</button>
+  </div>
+  <div class="controls-row">
+    <div class="info-bar">
+      <div class="info-avatar" id="infoAvatar">AS</div>
+      <div class="info-text">
+        <div class="info-name" id="infoName">Abu Bakr Al-Shatri</div>
+        <div class="info-meta" id="infoMeta">Al-Fatiha 1</div>
+      </div>
+    </div>
+    <button class="play-btn" id="playBtn">&#9658;</button>
+    <span class="time" id="curTime">0:00</span>
+    <input type="range" id="seek" min="0" max="1000" value="0">
+    <span class="time" id="totTime">0:00</span>
+  </div>
+  <div class="mode-toggle">
+    <button id="modeLetter" class="on">Letter</button>
+    <button id="modeWord">Word</button>
+    <button id="modeMushaf">Mushaf</button>
+    <button id="tajweedToggle" class="tajweed-btn" disabled title="Colored tajweed rules, Mushaf mode only">Tajweed</button>
+    <button id="modeBrowse">Browse letters</button>
+  </div>
+</div>
+
+<div class="credit">Built on the open-source <a href="https://github.com/Wider-Community/quranic-universal-audio" target="_blank">Qur'anic Universal Audio</a> dataset &mdash; phoneme-aligned timestamps, CC BY 4.0. Audio: audio-cdn.tarteel.ai. Text, morphology &amp; milestones (juz/hizb/rub/manzil/ruku/page/line/sajda) from <a href="https://github.com/dfordev1/usxv2" target="_blank">QUSX</a>, Hafs &#39;an &#39;Asim (hafs-kufi) tradition, NFC-normalized.</div>
+
+<audio id="player" preload="auto"></audio>
+
+<script>
+const SURAH_INDEX = __SURAH_INDEX_JSON__; // 114 entries: {num, name, nameArabic, ayahCount}, from QUSX (github.com/dfordev1/usxv2)
+
+// QPC V2 glyph data: surah -> ayah -> [glyph char per word position, plus a
+// trailing ayah-number glyph]. From Tarteel's QUL ("QPC V2 Glyph - Word by
+// Word" resource) — the real per-word glyph codes for the same "KFGQPC V2"
+// mushaf edition QUSX's own `layout` attribute already references. Paired
+// at render time with the actual per-page QCF V2 font files (loaded live,
+// per page, from Quran Foundation's open font CDN — see ensurePageFont).
+const GLYPH_V2 = __GLYPH_V2_JSON__;
+
+// One @font-face-equivalent FontFace per mushaf page (604 total across the
+// whole Qur'an), loaded lazily only for pages actually shown, from the
+// same public, CORS-open CDN Quran.com's own Mushaf mode uses.
+const loadedPageFonts = new Set();
+async function ensurePageFont(page) {
+  if (!page || loadedPageFonts.has(page)) return;
+  loadedPageFonts.add(page);
+  try {
+    const font = new FontFace('QCFP' + page, 'url(https://verses.quran.foundation/fonts/quran/hafs/v2/woff2/p' + page + '.woff2)');
+    await font.load();
+    document.fonts.add(font);
+  } catch (e) {
+    // Font failed to load (offline, blocked, etc) — mushaf mode falls back
+    // to the default serif and shows tofu for the glyph codepoints instead
+    // of crashing; classic letter/word modes are unaffected either way.
+  }
+}
+
+// Tajweed-colored mushaf font (QCF V4, COLRv1 color-font format): SAME
+// per-word glyph codes as V2 (GLYPH_V2 / the "code_v2" field is shared
+// across V2 and V4 per Quran Foundation's own docs) — only the font FILE
+// differs, with each glyph's tajweed-rule coloring painted in by the
+// original typesetters. Chrome/Edge/Safari render COLRv1 natively;
+// Firefox falls back to plain glyph shapes (no crash, just no color).
+const loadedTajweedFonts = new Set();
+async function ensureTajweedFont(page) {
+  if (!page || loadedTajweedFonts.has(page)) return;
+  loadedTajweedFonts.add(page);
+  try {
+    const font = new FontFace('QCFT' + page, 'url(https://verses.quran.foundation/fonts/quran/hafs/v4/colrv1/woff2/p' + page + '.woff2)');
+    await font.load();
+    document.fonts.add(font);
+  } catch (e) {
+    // falls back to the plain V2 glyph shape for this page, no crash
+  }
+}
+
+const RECITERS = __RECITERS_JSON__; // [config, displayName][] — all 36 reciters in the QUA dataset (hetchyy/quranic-universal-ayahs)
+let RECITER_CONFIG = RECITERS[8][0]; // default: Abu Bakr Al-Shatri
+
+// cumulative row offset per surah, for jumping straight to any surah's rows
+// in the HF datasets-server API without paging through the whole dataset
+let cum = 0;
+const SURAH_OFFSET = {};
+for (const s of SURAH_INDEX) { SURAH_OFFSET[s.num] = cum; cum += s.ayahCount; }
+
+let VERSES = [];        // current surah's verses, fetched live
+let MORPHOLOGY = {};    // 'ayah:position' -> {root,stem,lemma,text}, fetched live from QUSX
+let currentSurah = 1;
+
+let mode = 'letter'; // 'letter' | 'word' | 'mushaf'
+let tajweedOn = false; // Mushaf-mode-only: colored tajweed rules via QCF V4
+let currentVerseIdx = 0;
+let userSeeking = false;
+
+const versesEl = document.getElementById('verses');
+const audio = document.getElementById('player');
+const playBtn = document.getElementById('playBtn');
+const seek = document.getElementById('seek');
+const curTimeEl = document.getElementById('curTime');
+const totTimeEl = document.getElementById('totTime');
+const surahSelect = document.getElementById('surahSelect');
+const reciterSelect = document.getElementById('reciterSelect');
+const loadStatusEl = document.getElementById('loadStatus');
+const infoAvatar = document.getElementById('infoAvatar');
+const infoName = document.getElementById('infoName');
+
+SURAH_INDEX.forEach(s => {
+  const opt = document.createElement('option');
+  opt.value = s.num;
+  opt.textContent = s.num + '. ' + s.name + ' (' + s.nameArabic + ')';
+  surahSelect.appendChild(opt);
+});
+surahSelect.addEventListener('change', () => loadSurah(+surahSelect.value));
+
+RECITERS.forEach(([config, name]) => {
+  const opt = document.createElement('option');
+  opt.value = config;
+  opt.textContent = name;
+  if (config === RECITER_CONFIG) opt.selected = true;
+  reciterSelect.appendChild(opt);
+});
+function reciterInitials(name) {
+  return name.split(/[\s(]/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+}
+function refreshReciterInfo() {
+  const name = RECITERS.find(r => r[0] === RECITER_CONFIG)?.[1] || RECITER_CONFIG;
+  infoName.textContent = name;
+  infoAvatar.textContent = reciterInitials(name);
+}
+reciterSelect.addEventListener('change', () => {
+  RECITER_CONFIG = reciterSelect.value;
+  refreshReciterInfo();
+  loadSurah(currentSurah); // same surah, new reciter's audio/timing
+});
+refreshReciterInfo();
+
+function fmtTime(ms) {
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return m + ':' + String(r).padStart(2, '0');
+}
+
+// Split full-tashkeel Uthmani text into display "clusters": a base letter plus
+// any trailing combining marks (harakat, shadda, sukun, tanwin, tatweel).
+// Superscript alef (U+0670) is NOT merged in — it carries its own audible
+// madd duration and gets its own timing entry, matching the letter_timestamps
+// array from the dataset 1:1.
+const COMBINING_RANGES = [
+  [0x064B, 0x0652], // fathatan..sukun
+  [0x0653, 0x065F], // maddah/hamza-above-below variants, small marks
+  [0x06D6, 0x06ED],  // quranic annotation signs
+  [0x0610, 0x061A],  // honorific/quranic signs
+  [0x0640, 0x0640],  // tatweel
+];
+function isCombining(cp) {
+  for (const [a, b] of COMBINING_RANGES) if (cp >= a && cp <= b) return true;
+  return false;
+}
+function buildClusters(text) {
+  const clusters = [];
+  for (const ch of text) {
+    if (ch === ' ') continue;
+    const cp = ch.codePointAt(0);
+    if (isCombining(cp) && clusters.length) {
+      clusters[clusters.length - 1] += ch;
+    } else {
+      clusters.push(ch);
+    }
+  }
+  return clusters;
+}
+
+let flatLetters = []; // built up across all verses while rendering, for letter-browse mode; reset per surah load
+
+function renderVerse(v, idx) {
+  const div = document.createElement('div');
+  div.className = 'verse';
+  div.dataset.idx = idx;
+
+  const numEl = document.createElement('div');
+  numEl.className = 'verse-num';
+  numEl.textContent = v.surah + ':' + v.ayah;
+  if (v.sajda) {
+    const badge = document.createElement('span');
+    badge.className = 'sajda-badge';
+    badge.textContent = '۩ sajda · ' + v.sajda;
+    numEl.appendChild(badge);
+  }
+  div.appendChild(numEl);
+
+  const textEl = document.createElement('div');
+  textEl.className = 'verse-text classic-text';
+
+  const letters = v.letters;
+  const n = letters.word_idx.length;
+
+  // Some recordings genuinely re-recite part of an ayah (a reciter retake/
+  // repetition) — QUA's "repetition-aware" pipeline preserves BOTH takes in
+  // the timing arrays (letters.word_idx can revisit the same word number in
+  // a second, non-contiguous run), while the canonical QUSX text has each
+  // word once. Walking that against one flat whole-ayah cluster array made
+  // every letter after the repeat point drift onto the wrong glyph — split
+  // words, garbled joining, duplicated-looking phrases. Fix: split into
+  // contiguous "runs" of the same word_idx (each run = one spoken take of
+  // that word); render visible letter cells only for a word's FIRST run
+  // (scoping cluster-building to just that one word, not the whole ayah —
+  // so a mismatch anywhere can never corrupt a different word), and record
+  // any later repeat run purely as an extra time-window so the same on-
+  // screen cell still lights up correctly when the reciter repeats it.
+  const runs = [];
+  {
+    let i = 0;
+    while (i < n) {
+      const wIdx = letters.word_idx[i];
+      const start = i;
+      while (i < n && letters.word_idx[i] === wIdx) i++;
+      runs.push({ wIdx, start, end: i });
+    }
+  }
+  const firstRunByWord = new Map();
+  const extraWindowsByWord = new Map(); // wIdx -> [[absStart,absEnd], ...] from repeat takes
+  for (const run of runs) {
+    if (!firstRunByWord.has(run.wIdx)) {
+      firstRunByWord.set(run.wIdx, run);
+    } else {
+      const absStart = v.source_offset_ms + letters.start_ms[run.start];
+      const absEnd = v.source_offset_ms + letters.end_ms[run.end - 1];
+      if (!extraWindowsByWord.has(run.wIdx)) extraWindowsByWord.set(run.wIdx, []);
+      extraWindowsByWord.get(run.wIdx).push([absStart, absEnd]);
+    }
+  }
+
+  // NOT re-derived by splitting v.text on spaces — a QUSX word can itself
+  // contain an embedded space (e.g. "لَكُمْ ۗ", the word plus its trailing
+  // pause mark), which would silently shift every later word's index by one.
+  const qusxWords = v.qusxWords;
+
+  // QUSX's own mushaf line boundaries, captured per word position while
+  // walking the XML (<line number="N".../> pins) — used to force real
+  // print-accurate line wraps inside a verse, not just at ayah edges.
+  const wordLines = v.wordLines || [];
+  let lastLine = wordLines.length ? wordLines[0] : null;
+
+  const sortedWordIdx = [...firstRunByWord.keys()].sort((a, b) => a - b);
+  for (const wIdx of sortedWordIdx) {
+    const thisLine = wordLines[wIdx - 1];
+    if (thisLine != null && lastLine != null && thisLine !== lastLine) {
+      textEl.appendChild(document.createElement('br'));
+    }
+    lastLine = thisLine != null ? thisLine : lastLine;
+    const run = firstRunByWord.get(wIdx);
+    // fall back to bare consonants only for THIS word if its own cluster
+    // count doesn't match its own letter count — never lets a mismatch
+    // bleed into neighboring words
+    const wordClusters = buildClusters(qusxWords[wIdx - 1] || '');
+    const useClusters = wordClusters.length === (run.end - run.start);
+
+    const wordSpan = document.createElement('span');
+    wordSpan.className = 'word';
+    wordSpan.dataset.word = wIdx;
+    let wordStart = null;
+    for (let j = run.start; j < run.end; j++) {
+      const ch = document.createElement('span');
+      ch.className = 'letter';
+      const absStart = v.source_offset_ms + letters.start_ms[j];
+      const absEnd = v.source_offset_ms + letters.end_ms[j];
+      if (wordStart === null) wordStart = absStart;
+      ch.dataset.start = absStart;
+      ch.dataset.end = absEnd;
+      ch.dataset.word = wIdx;
+      ch.dataset.gidx = flatLetters.length; // global cross-verse index for letter-browse mode
+      ch.textContent = useClusters ? wordClusters[j - run.start] : letters.char[j];
+      flatLetters.push({ verseIdx: idx, verse: v, startMs: absStart, endMs: absEnd, char: ch.textContent });
+      wordSpan.appendChild(ch);
+    }
+    const extraWindows = extraWindowsByWord.get(wIdx);
+    if (extraWindows) {
+      const json = JSON.stringify(extraWindows);
+      wordSpan.dataset.extraWindows = json;
+      wordSpan.querySelectorAll('.letter').forEach(el => { el.dataset.extraWindows = json; });
+    }
+    wordSpan.dataset.startMs = wordStart;
+    wordSpan.addEventListener('click', (e) => {
+      e.stopPropagation();
+      audio.currentTime = wordStart / 1000;
+      audio.play();
+    });
+    const morph = MORPHOLOGY[v.ayah + ':' + wIdx];
+    if (morph) {
+      wordSpan.classList.add('has-morph');
+      wordSpan.tabIndex = 0;
+      wordSpan.addEventListener('mouseenter', () => showMorphTip(wordSpan, morph));
+      wordSpan.addEventListener('mouseleave', hideMorphTip);
+      wordSpan.addEventListener('focus', () => showMorphTip(wordSpan, morph));
+      wordSpan.addEventListener('blur', hideMorphTip);
+    }
+    textEl.appendChild(wordSpan);
+    textEl.appendChild(document.createTextNode(' '));
+  }
+
+  const pin = document.createElement('span');
+  pin.className = 'ayah-pin';
+  pin.textContent = toArabicDigits(v.ayah);
+  textEl.appendChild(pin);
+
+  div.appendChild(textEl);
+  div.addEventListener('click', () => jumpToVerse(idx));
+  return div;
+}
+
+// --- Mushaf mode: a genuinely continuous page, not per-verse cards. Real
+// mushaf pages have no visual break between verses at all — words just
+// flow, wrapping to a new line only where QUSX's own <line> pins say a
+// real mushaf line ends, which often falls MID-ayah. So this groups
+// VERSES by page and lays out every word from every verse on that page
+// into one shared flow of line-divs, carrying the current line number
+// across ayah boundaries within the page (not resetting per verse).
+const mushafPagesEl = document.getElementById('mushafPages');
+
+function buildMushafGlyphSpan(v, wIdx, wordStart) {
+  const glyphWords = (GLYPH_V2[v.surah] || {})[v.ayah] || [];
+  const glyphChar = glyphWords[wIdx - 1];
+  if (!glyphChar) return null;
+  const gSpan = document.createElement('span');
+  gSpan.className = 'word mushaf-glyph';
+  gSpan.dataset.word = wIdx;
+  gSpan.dataset.ayah = v.ayah;
+  gSpan.textContent = glyphChar;
+  if (wordStart != null) {
+    gSpan.addEventListener('click', (e) => {
+      e.stopPropagation();
+      audio.currentTime = wordStart / 1000;
+      audio.play();
+      jumpToVerse(VERSES.indexOf(v), false);
+    });
+  }
+  return gSpan;
+}
+
+function renderMushafPages() {
+  mushafPagesEl.innerHTML = '';
+  if (!VERSES.length) return;
+  const sMeta = SURAH_INDEX.find(x => x.num === currentSurah);
+
+  const pageGroups = [];
+  for (const v of VERSES) {
+    let g = pageGroups[pageGroups.length - 1];
+    if (!g || g.page !== v.page) {
+      g = { page: v.page, verses: [] };
+      pageGroups.push(g);
+    }
+    g.verses.push(v);
+  }
+
+  pageGroups.forEach((g, gi) => {
+    const pageDiv = document.createElement('div');
+    pageDiv.className = 'mushaf-page';
+
+    const header = document.createElement('div');
+    header.className = 'mushaf-page-header';
+    const juz = g.verses[0].juz;
+    header.textContent = (g.page ? 'PAGE ' + g.page : '') + (juz ? '   ·   JUZ ' + juz : '');
+    pageDiv.appendChild(header);
+
+    if (gi === 0 && sMeta && sMeta.bismillahPre && currentSurah !== 1) {
+      const b = document.createElement('div');
+      b.className = 'bismillah';
+      b.textContent = 'بِسْمِ اللَّهِ الرَّحْمَـٰنِ الرَّحِيمِ';
+      pageDiv.appendChild(b);
+    }
+
+    const flow = document.createElement('div');
+    flow.className = 'verse-text mushaf-text';
+    if (g.page) {
+      const family = tajweedOn ? 'QCFT' + g.page : 'QCFP' + g.page;
+      flow.style.fontFamily = family + ', "Traditional Arabic", serif';
+    }
+
+    let curLineNum = null;
+    let lineDiv = null;
+    for (const v of g.verses) {
+      const wordLines = v.wordLines || [];
+      const qusxWords = v.qusxWords || [];
+      const wordTimeMs = new Map();
+      for (const [wIdx, s] of (v.words || [])) wordTimeMs.set(wIdx, v.source_offset_ms + s);
+
+      for (let wIdx = 1; wIdx <= qusxWords.length; wIdx++) {
+        const thisLine = wordLines[wIdx - 1];
+        if (!lineDiv || (thisLine != null && thisLine !== curLineNum)) {
+          lineDiv = document.createElement('div');
+          lineDiv.className = 'mushaf-line';
+          flow.appendChild(lineDiv);
+          curLineNum = thisLine;
+        }
+        const gSpan = buildMushafGlyphSpan(v, wIdx, wordTimeMs.has(wIdx) ? wordTimeMs.get(wIdx) : null);
+        if (gSpan) {
+          lineDiv.appendChild(gSpan);
+          lineDiv.appendChild(document.createTextNode(' '));
+        }
+      }
+      // The font's own trailing ayah-number glyph — the real mushaf's
+      // ornamental end-of-verse marker, non-interactive (no audio of its
+      // own), inline right after the verse's last word like the real page.
+      const glyphWords = (GLYPH_V2[v.surah] || {})[v.ayah] || [];
+      const numGlyph = glyphWords[glyphWords.length - 1];
+      if (numGlyph && lineDiv) {
+        const numSpan = document.createElement('span');
+        numSpan.className = 'mushaf-num-glyph';
+        numSpan.textContent = numGlyph;
+        lineDiv.appendChild(numSpan);
+      }
+      if (v.sajda && lineDiv) {
+        const badge = document.createElement('span');
+        badge.className = 'sajda-badge';
+        badge.textContent = '۩';
+        lineDiv.appendChild(badge);
+      }
+    }
+    pageDiv.appendChild(flow);
+    mushafPagesEl.appendChild(pageDiv);
+  });
+}
+
+const scrubberEl = document.getElementById('scrubber');
+
+function toArabicDigits(n) {
+  const map = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+  return String(n).split('').map(d => map[+d] ?? d).join('');
+}
+
+function makeBreak(label, isPage) {
+  const div = document.createElement('div');
+  div.className = 'qusx-break' + (isPage ? ' page' : '');
+  const ln1 = document.createElement('div');
+  ln1.className = 'ln';
+  const lbl = document.createElement('div');
+  lbl.className = 'lbl';
+  lbl.textContent = label;
+  const ln2 = document.createElement('div');
+  ln2.className = 'ln';
+  div.appendChild(ln1);
+  div.appendChild(lbl);
+  div.appendChild(ln2);
+  return div;
+}
+
+function makeRukuMark(n) {
+  const div = document.createElement('div');
+  div.className = 'qusx-ruku';
+  div.textContent = '⁘ ruku ' + n;
+  return div;
+}
+
+function renderAll() {
+  versesEl.innerHTML = '';
+  scrubberEl.innerHTML = '';
+  flatLetters = [];
+  const sMeta = SURAH_INDEX.find(x => x.num === currentSurah);
+  if (sMeta && sMeta.bismillahPre && currentSurah !== 1) {
+    const b = document.createElement('div');
+    b.className = 'bismillah';
+    b.textContent = 'بِسْمِ اللَّهِ الرَّحْمَـٰنِ الرَّحِيمِ';
+    versesEl.appendChild(b);
+  }
+  let prevJuz = null, prevPage = null, prevRuku = null;
+  VERSES.forEach((v, idx) => {
+    const labels = [];
+    if (v.page && v.page !== prevPage) labels.push({ text: 'PAGE ' + v.page, page: true });
+    if (v.juz && v.juz !== prevJuz) labels.push({ text: 'JUZ ' + v.juz, page: false });
+    for (const l of labels) versesEl.appendChild(makeBreak(l.text, l.page));
+    if (v.ruku && v.ruku !== prevRuku && !labels.length) versesEl.appendChild(makeRukuMark(v.ruku));
+    prevJuz = v.juz;
+    prevPage = v.page;
+    prevRuku = v.ruku;
+    versesEl.appendChild(renderVerse(v, idx));
+  });
+  renderMushafPages();
+  VERSES.forEach((v, idx) => {
+    const b = document.createElement('button');
+    b.className = 'scrub-btn';
+    b.dataset.idx = idx;
+    b.textContent = v.ayah;
+    b.addEventListener('click', () => jumpToVerse(idx));
+    scrubberEl.appendChild(b);
+  });
+}
+
+function refreshScrubber(idx) {
+  document.querySelectorAll('.scrub-btn').forEach((b, i) => b.classList.toggle('active', i === idx));
+  const active = document.querySelector('.scrub-btn.active');
+  if (active) active.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+}
+const infoMeta = document.getElementById('infoMeta');
+function refreshInfoBar(idx) {
+  const s = SURAH_INDEX.find(x => x.num === currentSurah);
+  const place = s && s.revelationPlace ? (s.revelationPlace === 'makkah' ? 'Makkan' : 'Madinan') : null;
+  let text = (s ? s.name : currentSurah) + ' ' + VERSES[idx].ayah;
+  if (place) text += ' · ' + place;
+  infoMeta.textContent = text;
+}
+
+// The HF datasets-server /rows endpoint caps `length` at 100 — many surahs
+// (Al-Baqarah has 286 ayahs) exceed that, so fetch in <=100-row pages and
+// concatenate. Pages are independent (known offsets upfront), so fetch them
+// concurrently rather than sequentially.
+const ROWS_PAGE_SIZE = 100;
+async function fetchAllRows(offset, length) {
+  const pageOffsets = [];
+  for (let o = offset; o < offset + length; o += ROWS_PAGE_SIZE) pageOffsets.push(o);
+  const pages = await Promise.all(pageOffsets.map(async (o) => {
+    const len = Math.min(ROWS_PAGE_SIZE, offset + length - o);
+    const url = 'https://datasets-server.huggingface.co/rows?dataset=hetchyy%2Fquranic-universal-ayahs&config='
+      + RECITER_CONFIG + '&split=train&offset=' + o + '&length=' + len;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('audio/timing fetch failed (' + res.status + ')');
+    return (await res.json()).rows;
+  }));
+  return pages.flat();
+}
+
+// Fetch a surah's audio timing (QUA, per-reciter) + text/morphology (QUSX,
+// canonical) live and merge them client-side by (ayah, word position) — the
+// two datasets share that indexing convention, so no server-side join needed.
+async function loadSurah(num) {
+  currentSurah = num;
+  const meta = SURAH_INDEX.find(s => s.num === num);
+  loadStatusEl.textContent = 'Loading ' + meta.name + '…';
+  loadStatusEl.classList.remove('error');
+  audio.pause();
+
+  try {
+    const offset = SURAH_OFFSET[num];
+    const length = meta.ayahCount;
+    const xmlUrl = 'https://raw.githubusercontent.com/dfordev1/usxv2/main/output/madani-v2/'
+      + String(num).padStart(3, '0') + '.qusx.xml';
+
+    const [rows, xmlRes] = await Promise.all([fetchAllRows(offset, length), fetch(xmlUrl)]);
+    if (!xmlRes.ok) throw new Error('QUSX text fetch failed (' + xmlRes.status + ')');
+    const xmlText = await xmlRes.text();
+
+    // Actually walk QUSX's milestone structure — this is a USX-style flat
+    // word stream sliced by independent sid/eid boundary pins (juz, hizb,
+    // rub, manzil, page, sajda, ayah), not just a bag of <word> attributes.
+    // We track each axis's *currently open* pin as we walk in document
+    // order, snapshot it onto each ayah, and reconstruct the ayah's own
+    // canonical text from its word stream (not QUA's copy) — so QUSX is the
+    // real text/structure source, and QUA is used only for audio + timing,
+    // which is the division of labor this integration should have had from
+    // the start.
+    const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+    if (doc.querySelector('parsererror')) throw new Error('QUSX XML parse error');
+    const newMorph = {};
+    const ayahMeta = {}; // ayah number -> {juz,hizb,rub,manzil,page,ruku,sajda,text,wordLines,fragments}
+    let curAyah = null;
+    let curJuz = null, curHizb = null, curRub = null, curManzil = null, curPage = null, curRuku = null, curLine = null;
+    // fragment ("start"/"middle"/"end"/"whole") of whichever juz/hizb/rub/
+    // manzil/ruku pin is CURRENTLY open — lets a consumer tell "this
+    // milestone genuinely begins here" from "we're picking up mid-milestone
+    // because the surah opened inside one carried over from before".
+    let curJuzFrag = null, curHizbFrag = null, curRubFrag = null, curManzilFrag = null, curRukuFrag = null;
+    let wordBuf = [];
+    for (const el of doc.documentElement.children) {
+      const tag = el.tagName;
+      const num = el.getAttribute('number');
+      if (tag === 'juz' && num) { curJuz = +num; curJuzFrag = el.getAttribute('fragment'); }
+      else if (tag === 'hizb' && num) { curHizb = +num; curHizbFrag = el.getAttribute('fragment'); }
+      else if (tag === 'rub' && num) { curRub = +num; curRubFrag = el.getAttribute('fragment'); }
+      else if (tag === 'manzil' && num) { curManzil = +num; curManzilFrag = el.getAttribute('fragment'); }
+      else if (tag === 'ruku' && num) { curRuku = +num; curRukuFrag = el.getAttribute('fragment'); }
+      else if (tag === 'page' && num) curPage = +num;
+      else if (tag === 'line' && num) curLine = +num;
+      else if (tag === 'sajda') {
+        if (curAyah) (ayahMeta[curAyah] || (ayahMeta[curAyah] = {})).sajda = el.getAttribute('type') || 'required';
+      } else if (tag === 'ayah' && num) {
+        curAyah = +num;
+        wordBuf = [];
+        ayahMeta[curAyah] = Object.assign({
+          juz: curJuz, hizb: curHizb, rub: curRub, manzil: curManzil, page: curPage, ruku: curRuku,
+          fragments: { juz: curJuzFrag, hizb: curHizbFrag, rub: curRubFrag, manzil: curManzilFrag, ruku: curRukuFrag },
+          words: [], wordIds: [], wordLines: [],
+        }, ayahMeta[curAyah] || {});
+      } else if (tag === 'word' && curAyah) {
+        if (el.getAttribute('type') !== 'number') {
+          // Some QUSX words carry an embedded space in their OWN text (e.g.
+          // "لَكُمْ ۗ" — the word plus its trailing pause mark, as one unit).
+          // Keep each word's raw text in its own array slot, keyed by
+          // position — never reconstruct per-word text by re-splitting the
+          // joined ayah string on spaces later, since that embedded space
+          // would silently shift every later word's index by one.
+          wordBuf.push(el.textContent);
+          ayahMeta[curAyah].words.push(el.textContent);
+          ayahMeta[curAyah].wordIds.push(el.getAttribute('id'));
+          ayahMeta[curAyah].wordLines.push(curLine);
+          const pos = +el.getAttribute('position');
+          newMorph[curAyah + ':' + pos] = {
+            id: el.getAttribute('id'),
+            root: el.getAttribute('root'),
+            stem: el.getAttribute('stem'),
+            lemma: el.getAttribute('lemma'),
+            text: el.textContent,
+          };
+        }
+        ayahMeta[curAyah].text = wordBuf.join(' ');
+      }
+    }
+
+    VERSES = rows.map(row => {
+      const r = row.row;
+      const meta = ayahMeta[r.ayah] || {};
+      return {
+        surah: r.surah,
+        ayah: r.ayah,
+        // QUSX's own reconstructed word stream is the canonical text; QUA's
+        // text_uthmani is kept only as a fallback if a row has no QUSX match
+        text: meta.text || r.text_uthmani,
+        qusxWords: meta.words || [], // QUSX's own per-word text, indexed by position — NOT re-derived from splitting `text`
+        audio: 'https://' + r.source_url,
+        duration_ms: r.duration_ms,
+        source_offset_ms: r.source_offset_ms,
+        words: r.word_timestamps,
+        letters: r.letter_timestamps,
+        juz: meta.juz, hizb: meta.hizb, rub: meta.rub, manzil: meta.manzil, page: meta.page, ruku: meta.ruku, sajda: meta.sajda,
+        fragments: meta.fragments || {},
+        wordLines: meta.wordLines || [],
+      };
+    });
+    MORPHOLOGY = newMorph;
+
+    // Load every distinct mushaf page's own font before rendering, so
+    // Mushaf mode doesn't flash tofu-then-glyphs for the pages this surah
+    // touches (usually 1-2, up to ~20 for very long surahs).
+    const pages = [...new Set(VERSES.map(v => v.page).filter(Boolean))];
+    await Promise.all(pages.map(ensurePageFont));
+    if (tajweedOn) await Promise.all(pages.map(ensureTajweedFont));
+
+    renderAll();
+    audio.src = VERSES[0].audio;
+    currentVerseIdx = 0;
+    document.querySelector('.verse[data-idx="0"]').classList.add('active');
+    refreshScrubber(0);
+    refreshInfoBar(0);
+    if (browsing) exitBrowse();
+    loadStatusEl.textContent = meta.ayahCount + ' verses loaded — ' + meta.nameArabic;
+  } catch (err) {
+    loadStatusEl.textContent = 'Could not load ' + meta.name + ': ' + err.message;
+    loadStatusEl.classList.add('error');
+  }
+}
+
+function jumpToVerse(idx, autoplay) {
+  if (autoplay === undefined) autoplay = true;
+  currentVerseIdx = idx;
+  if (autoplay) audio.currentTime = VERSES[idx].source_offset_ms / 1000;
+  document.querySelectorAll('.verse').forEach((el, i) => el.classList.toggle('active', i === idx));
+  clearHighlights();
+  refreshScrubber(idx);
+  refreshInfoBar(idx);
+  if (autoplay) audio.play();
+}
+
+// Word morphology tooltip (root/stem/lemma), from QUSX (github.com/dfordev1/usxv2)
+const morphTipEl = document.getElementById('morphTip');
+function showMorphTip(wordSpan, morph) {
+  morphTipEl.innerHTML =
+    '<div class="mt-arabic">' + morph.text + '</div>' +
+    '<div class="mt-row"><span class="mt-label">root</span><span class="mt-arabic">' + morph.root + '</span></div>' +
+    '<div class="mt-row"><span class="mt-label">lemma</span><span class="mt-arabic">' + morph.lemma + '</span></div>' +
+    (morph.id ? '<div class="mt-row"><span class="mt-label">word id</span><span class="mt-arabic">' + morph.id + '</span></div>' : '');
+  const r = wordSpan.getBoundingClientRect();
+  morphTipEl.style.left = Math.max(8, r.left + r.width / 2 - 120) + 'px';
+  morphTipEl.style.top = (r.top - 96) + 'px';
+  morphTipEl.classList.add('show');
+}
+function hideMorphTip() {
+  morphTipEl.classList.remove('show');
+}
+
+function clearHighlights() {
+  document.querySelectorAll('.letter.lit').forEach(el => el.classList.remove('lit'));
+  document.querySelectorAll('.word.active-word').forEach(el => el.classList.remove('active-word'));
+}
+
+function verseAtMs(ms) {
+  for (let i = 0; i < VERSES.length; i++) {
+    const v = VERSES[i];
+    if (ms >= v.source_offset_ms && ms < v.source_offset_ms + v.duration_ms) return i;
+  }
+  // fallback: last verse whose offset has passed
+  for (let i = VERSES.length - 1; i >= 0; i--) {
+    if (ms >= VERSES[i].source_offset_ms) return i;
+  }
+  return 0;
+}
+
+function updateHighlight() {
+  const ms = audio.currentTime * 1000;
+  const idx = verseAtMs(ms);
+  if (idx !== currentVerseIdx) {
+    currentVerseIdx = idx;
+    document.querySelectorAll('.verse').forEach((el, i) => el.classList.toggle('active', i === idx));
+    clearHighlights();
+    refreshScrubber(idx);
+    refreshInfoBar(idx);
+    const activeEl = document.querySelector('.verse.active');
+    if (activeEl) activeEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  const verseEl = document.querySelector('.verse[data-idx="' + currentVerseIdx + '"]');
+  if (!verseEl) return;
+
+  // Letter-level lighting runs in BOTH modes now — 'letter' mode shows it
+  // on its own, and 'word' mode layers it INSIDE the active word's
+  // highlighted box, so you see which word is playing AND exactly which
+  // letter within it, at the same time, instead of the two being mutually
+  // exclusive views.
+  verseEl.querySelectorAll('.letter').forEach(el => {
+    const s = +el.dataset.start, e = +el.dataset.end;
+    let active = ms >= s && ms < e;
+    if (!active && el.dataset.extraWindows) {
+      // a reciter repeat/retake — the same on-screen cell also lights
+      // during the take(s) after its first occurrence
+      active = JSON.parse(el.dataset.extraWindows).some(([a, b]) => ms >= a && ms < b);
+    }
+    el.classList.toggle('lit', active);
+  });
+
+  if (mode === 'letter') {
+    verseEl.querySelectorAll('.word').forEach(el => el.classList.remove('active-word'));
+  } else {
+    const v = VERSES[currentVerseIdx];
+    let activeWord = null;
+    for (const [wIdx, s, e] of v.words) {
+      if (ms - v.source_offset_ms >= s && ms - v.source_offset_ms < e) { activeWord = wIdx; break; }
+    }
+    verseEl.querySelectorAll('.word').forEach(el => {
+      el.classList.toggle('active-word', activeWord !== null && +el.dataset.word === activeWord);
+    });
+
+    // Mushaf mode has no per-verse container to scope by (it's one
+    // continuous flowing page) — select this ayah's glyphs directly by
+    // data-ayah instead, since a bare word position (data-word) repeats
+    // across every ayah on the page.
+    if (mode === 'mushaf') {
+      document.querySelectorAll('.mushaf-glyph[data-ayah="' + v.ayah + '"]').forEach(el => {
+        el.classList.toggle('active-word', activeWord !== null && +el.dataset.word === activeWord);
+      });
+      document.querySelectorAll('.mushaf-glyph.active-word').forEach(el => {
+        if (el.dataset.ayah !== String(v.ayah)) el.classList.remove('active-word');
+      });
+    }
+  }
+}
+
+audio.addEventListener('timeupdate', () => {
+  updateHighlight();
+  if (audio.duration && !userSeeking) {
+    seek.value = (audio.currentTime / audio.duration) * 1000;
+  }
+  curTimeEl.textContent = fmtTime(audio.currentTime * 1000);
+  totTimeEl.textContent = fmtTime((audio.duration || 0) * 1000);
+});
+
+audio.addEventListener('play', () => playBtn.innerHTML = '&#10074;&#10074;');
+audio.addEventListener('pause', () => playBtn.innerHTML = '&#9658;');
+audio.addEventListener('ended', () => playBtn.innerHTML = '&#9658;');
+
+playBtn.addEventListener('click', () => {
+  if (audio.paused) audio.play(); else audio.pause();
+});
+
+seek.addEventListener('mousedown', () => userSeeking = true);
+seek.addEventListener('touchstart', () => userSeeking = true);
+seek.addEventListener('change', () => {
+  if (audio.duration) audio.currentTime = (seek.value / 1000) * audio.duration;
+  userSeeking = false;
+});
+
+document.getElementById('modeLetter').addEventListener('click', () => setMode('letter'));
+document.getElementById('modeWord').addEventListener('click', () => setMode('word'));
+document.getElementById('modeMushaf').addEventListener('click', () => setMode('mushaf'));
+const tajweedBtn = document.getElementById('tajweedToggle');
+tajweedBtn.addEventListener('click', async () => {
+  if (mode !== 'mushaf') return;
+  tajweedOn = !tajweedOn;
+  tajweedBtn.classList.toggle('on', tajweedOn);
+  if (tajweedOn) {
+    const pages = [...new Set(VERSES.map(v => v.page).filter(Boolean))];
+    await Promise.all(pages.map(ensureTajweedFont));
+  }
+  renderMushafPages();
+});
+function setMode(m) {
+  mode = m;
+  document.getElementById('modeLetter').classList.toggle('on', m === 'letter');
+  document.getElementById('modeWord').classList.toggle('on', m === 'word');
+  document.getElementById('modeMushaf').classList.toggle('on', m === 'mushaf');
+  // Mushaf mode has no letter-level timing of its own (one glyph = one
+  // whole word) — it reuses word-level highlighting, same as 'word' mode.
+  // It's also a completely separate continuous-flow container (real
+  // mushaf pages have no per-verse boxes), not a CSS skin over the
+  // classic per-verse cards — so swap the whole container, not a class.
+  versesEl.style.display = m === 'mushaf' ? 'none' : 'flex';
+  mushafPagesEl.style.display = m === 'mushaf' ? 'flex' : 'none';
+  tajweedBtn.disabled = m !== 'mushaf';
+  clearHighlights();
+}
+
+// --- Letter-browse mode: step through every letter in the mushaf one at a
+// time (like paging through the dataset's letter tier directly) instead of
+// continuous playback. Pauses on each letter and plays just its own clip.
+let browsing = false;
+let browseIdx = 0;
+const browseBar = document.getElementById('browseBar');
+const browseLetterEl = document.getElementById('browseLetter');
+const browseMetaEl = document.getElementById('browseMeta');
+const modeBrowseBtn = document.getElementById('modeBrowse');
+
+function enterBrowse() {
+  browsing = true;
+  audio.pause();
+  browseBar.classList.add('on');
+  modeBrowseBtn.classList.add('on');
+  showBrowseLetter(browseIdx);
+}
+function exitBrowse() {
+  browsing = false;
+  browseBar.classList.remove('on');
+  modeBrowseBtn.classList.remove('on');
+}
+function showBrowseLetter(gidx) {
+  browseIdx = Math.max(0, Math.min(flatLetters.length - 1, gidx));
+  const L = flatLetters[browseIdx];
+  browseLetterEl.textContent = L.char;
+  browseMetaEl.textContent = L.verse.surah + ':' + L.verse.ayah + ' — letter ' + (browseIdx + 1) + ' / ' + flatLetters.length;
+
+  jumpToVerse(L.verseIdx, /*autoplay*/ false);
+  clearHighlights();
+  const cell = document.querySelector('.letter[data-gidx="' + browseIdx + '"]');
+  if (cell) {
+    cell.classList.add('lit');
+    cell.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  audio.currentTime = L.startMs / 1000;
+  audio.play();
+  const stopAt = L.endMs;
+  const onTick = () => {
+    if (audio.currentTime * 1000 >= stopAt) {
+      audio.pause();
+      audio.removeEventListener('timeupdate', onTick);
+    }
+  };
+  audio.addEventListener('timeupdate', onTick);
+}
+document.getElementById('browsePrev').addEventListener('click', () => showBrowseLetter(browseIdx - 1));
+document.getElementById('browseNext').addEventListener('click', () => showBrowseLetter(browseIdx + 1));
+modeBrowseBtn.addEventListener('click', () => { if (browsing) exitBrowse(); else enterBrowse(); });
+document.addEventListener('keydown', (e) => {
+  if (!browsing) return;
+  if (e.key === 'ArrowLeft') showBrowseLetter(browseIdx + 1);   // RTL: left = next
+  if (e.key === 'ArrowRight') showBrowseLetter(browseIdx - 1);  // RTL: right = prev
+  if (e.key === 'Escape') exitBrowse();
+});
+[playBtn, seek].forEach(el => el.addEventListener('click', () => { if (browsing) exitBrowse(); }));
+
+// init
+loadSurah(1);
+</script>
+</body>
+</html>
+"""
+
+html = html.replace('__SURAH_INDEX_JSON__', surah_index_json)
+html = html.replace('__GLYPH_V2_JSON__', glyph_v2_json)
+html = html.replace('__RECITERS_JSON__', reciters_json)
+with open('/home/claude/quran_followalong.html', 'w', encoding='utf-8') as f:
+    f.write(html)
+print('written', len(html), 'bytes')
