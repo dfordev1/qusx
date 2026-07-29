@@ -476,6 +476,36 @@
   }
   .word-inspector .wi-value.mono { font-family: monospace; font-size: 12px; direction: ltr; }
   .word.inspected { box-shadow: 0 0 0 2px var(--accent) !important; }
+  .wi-gloss {
+    direction: ltr;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .wi-gloss-lang { display: flex; gap: 6px; margin-bottom: 8px; }
+  .wi-lang-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    border-radius: 20px;
+    padding: 3px 10px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .wi-lang-btn.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+  .wi-gloss-body { font-size: 13px; color: var(--text-muted); min-height: 18px; }
+  .wi-gloss-text { color: var(--text); font-size: 14px; margin-bottom: 4px; }
+  .wi-gloss-spoken { font-size: 11px; font-style: italic; margin-bottom: 8px; }
+  .wi-play-btn {
+    background: var(--accent-soft);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    border-radius: 8px;
+    padding: 5px 12px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .wi-play-btn:hover { background: var(--accent); color: var(--surface); }
   @media (max-width: 640px) {
     .word-inspector {
       left: 12px; right: 12px; bottom: 150px; width: auto;
@@ -571,7 +601,7 @@
   </div>
 </div>
 
-<div class="credit">Built on the open-source <a href="https://github.com/Wider-Community/quranic-universal-audio" target="_blank">Qur'anic Universal Audio</a> dataset &mdash; phoneme-aligned timestamps, CC BY 4.0. Audio: audio-cdn.tarteel.ai. Text, morphology &amp; milestones (juz/hizb/rub/manzil/ruku/page/line/sajda) from <a href="https://github.com/dfordev1/usxv2" target="_blank">QUSX</a>, Hafs &#39;an &#39;Asim (hafs-kufi) tradition, NFC-normalized.</div>
+<div class="credit">Built on the open-source <a href="https://github.com/Wider-Community/quranic-universal-audio" target="_blank">Qur'anic Universal Audio</a> dataset &mdash; phoneme-aligned timestamps, CC BY 4.0. Audio: audio-cdn.tarteel.ai. Text, morphology &amp; milestones (juz/hizb/rub/manzil/ruku/page/line/sajda) from <a href="https://github.com/dfordev1/usxv2" target="_blank">QUSX</a>, Hafs &#39;an &#39;Asim (hafs-kufi) tradition, NFC-normalized. Spoken word-by-word English/Hindi gloss from <a href="https://github.com/dfordev1/qusx-audio" target="_blank">QUSX-Audio</a>.</div>
 
 <audio id="player" preload="auto"></audio>
 
@@ -1265,18 +1295,83 @@ const wordInspectorEl = document.getElementById('wordInspector');
 const wiBodyEl = document.getElementById('wiBody');
 const wiCloseBtn = document.getElementById('wiClose');
 let inspectedWordEl = null;
+
+// QUSX-Audio (github.com/dfordev1/qusx-audio) — spoken word-by-word gloss,
+// addressed by the same QUSX global word id as morph.id, layout-agnostic
+// (same ids across all 10 print editions). Fetched lazily per (lang, surah)
+// only when the inspector actually needs it, not prefetched for every surah.
+const GLOSS_BASE = {
+  en: 'https://quran-wbw-audio.quran-wbw.workers.dev/en/v1/',
+  hi: 'https://quran-wbw-audio.quran-wbw.workers.dev/hi/v1/',
+};
+let glossLang = localStorage.getItem('quran-gloss-lang') || 'en';
+const glossIndexCache = {}; // `${lang}:${surah}` -> parsed index json, or null on fetch failure
+const glossAudio = new Audio();
+async function fetchGlossIndex(lang, surah) {
+  const key = lang + ':' + surah;
+  if (key in glossIndexCache) return glossIndexCache[key];
+  try {
+    const res = await fetch(GLOSS_BASE[lang] + 'index/' + String(surah).padStart(3, '0') + '.json');
+    if (!res.ok) throw new Error('gloss fetch failed (' + res.status + ')');
+    glossIndexCache[key] = await res.json();
+  } catch (e) {
+    glossIndexCache[key] = null;
+  }
+  return glossIndexCache[key];
+}
+
+let inspectorToken = 0; // guards against a slow fetch from a since-replaced inspection overwriting the panel
 function showInspector(wordSpan, morph, v, wIdx) {
   if (inspectedWordEl) inspectedWordEl.classList.remove('inspected');
   inspectedWordEl = wordSpan;
   wordSpan.classList.add('inspected');
+  const myToken = ++inspectorToken;
   wiBodyEl.innerHTML =
     '<div class="wi-arabic">' + morph.text + '</div>' +
     '<div class="wi-ref">' + v.surah + ':' + v.ayah + ' &middot; word ' + wIdx + '</div>' +
     '<div class="wi-row"><span class="wi-label">root</span><span class="wi-value">' + (morph.root || '&mdash;') + '</span></div>' +
     '<div class="wi-row"><span class="wi-label">stem</span><span class="wi-value">' + (morph.stem || '&mdash;') + '</span></div>' +
     '<div class="wi-row"><span class="wi-label">lemma</span><span class="wi-value">' + (morph.lemma || '&mdash;') + '</span></div>' +
-    (morph.id ? '<div class="wi-row"><span class="wi-label">word id</span><span class="wi-value mono">' + morph.id + '</span></div>' : '');
+    (morph.id ? '<div class="wi-row"><span class="wi-label">word id</span><span class="wi-value mono">' + morph.id + '</span></div>' : '') +
+    '<div class="wi-gloss">' +
+      '<div class="wi-gloss-lang">' +
+        '<button class="wi-lang-btn' + (glossLang === 'en' ? ' on' : '') + '" data-lang="en">EN</button>' +
+        '<button class="wi-lang-btn' + (glossLang === 'hi' ? ' on' : '') + '" data-lang="hi">HI</button>' +
+      '</div>' +
+      '<div class="wi-gloss-body">Loading gloss&hellip;</div>' +
+    '</div>';
   wordInspectorEl.classList.add('show');
+  wiBodyEl.querySelectorAll('.wi-lang-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      glossLang = btn.dataset.lang;
+      localStorage.setItem('quran-gloss-lang', glossLang);
+      loadGlossFor(v, morph, myToken);
+    });
+  });
+  loadGlossFor(v, morph, myToken);
+}
+async function loadGlossFor(v, morph, token) {
+  const bodyEl = wiBodyEl.querySelector('.wi-gloss-body');
+  if (!bodyEl) return; // panel already replaced by a newer inspection
+  wiBodyEl.querySelectorAll('.wi-lang-btn').forEach(b => b.classList.toggle('on', b.dataset.lang === glossLang));
+  if (!morph.id) { bodyEl.textContent = 'No gloss (ayah-number token, not a word)'; return; }
+  bodyEl.textContent = 'Loading gloss…';
+  const idx = await fetchGlossIndex(glossLang, v.surah);
+  if (token !== inspectorToken) return; // superseded by a newer word click while the fetch was in flight
+  if (!idx) { bodyEl.textContent = 'Gloss unavailable (fetch failed)'; return; }
+  const clipId = idx.words[String(morph.id)];
+  if (!clipId) { bodyEl.textContent = 'No gloss for this word'; return; }
+  const printed = idx.text[clipId];
+  const spoken = idx.spoken && idx.spoken[clipId];
+  bodyEl.innerHTML =
+    '<div class="wi-gloss-text">' + printed + '</div>' +
+    (spoken ? '<div class="wi-gloss-spoken">spoken: &ldquo;' + spoken + '&rdquo;</div>' : '') +
+    '<button class="wi-play-btn" id="wiPlayBtn">&#9658; Play</button>';
+  bodyEl.querySelector('#wiPlayBtn').addEventListener('click', () => {
+    audio.pause(); // avoid overlapping the main recitation
+    glossAudio.src = idx.base + 'audio/' + clipId + '.opus';
+    glossAudio.play();
+  });
 }
 function hideInspector() {
   wordInspectorEl.classList.remove('show');
