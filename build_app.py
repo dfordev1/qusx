@@ -163,6 +163,8 @@ html = """<!DOCTYPE html>
     white-space: nowrap;
   }
   .qusx-break.page .lbl { color: var(--accent); }
+  .qusx-break.minor { margin: 2px 4px 6px; opacity: 0.55; }
+  .qusx-break.minor .lbl { font-size: 9px; }
   .ayah-pin {
     display: inline-flex;
     align-items: center;
@@ -422,6 +424,87 @@ html = """<!DOCTYPE html>
   .morph-tip .mt-label { color: var(--text-muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; }
   .morph-tip .mt-arabic { font-family: 'UthmanicHafs', "Traditional Arabic", "Scheherazade New", serif; font-size: 18px; }
 
+  /* Word inspector — a persistent panel (unlike the ephemeral hover tooltip
+     above) that stays open until explicitly closed, so a learner can keep
+     it visible while reading rather than re-hovering the same word. Docked
+     bottom-right on wide screens; becomes a full-width bottom sheet under
+     640px since there's no room for a floating corner panel there. */
+  .word-inspector {
+    position: fixed;
+    z-index: 60;
+    right: 20px;
+    bottom: 150px;
+    width: 280px;
+    max-width: calc(100vw - 40px);
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: 14px;
+    padding: 16px 18px;
+    box-shadow: var(--shadow);
+    direction: rtl;
+    transform: translateY(12px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s, transform 0.15s;
+  }
+  .word-inspector.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
+  .word-inspector .wi-close {
+    position: absolute;
+    top: 8px; left: 8px;
+    direction: ltr;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 4px;
+  }
+  .word-inspector .wi-close:hover { color: var(--accent); }
+  .word-inspector .wi-arabic {
+    font-family: 'UthmanicHafs', "Traditional Arabic", "Scheherazade New", serif;
+    font-size: 32px;
+    text-align: center;
+    margin-bottom: 4px;
+  }
+  .word-inspector .wi-ref {
+    direction: ltr;
+    text-align: center;
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+  }
+  .word-inspector .wi-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    padding: 6px 0;
+    border-top: 1px solid var(--border);
+    direction: ltr;
+  }
+  .word-inspector .wi-label {
+    color: var(--text-muted);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+  }
+  .word-inspector .wi-value {
+    font-family: 'UthmanicHafs', "Traditional Arabic", "Scheherazade New", serif;
+    font-size: 17px;
+    direction: rtl;
+    text-align: right;
+  }
+  .word-inspector .wi-value.mono { font-family: monospace; font-size: 12px; direction: ltr; }
+  .word.inspected { box-shadow: 0 0 0 2px var(--accent) !important; }
+  @media (max-width: 640px) {
+    .word-inspector {
+      left: 12px; right: 12px; bottom: 150px; width: auto;
+    }
+  }
+
   .surah-picker {
     display: flex; align-items: center; gap: 10px; margin-bottom: 6px;
   }
@@ -476,6 +559,10 @@ html = """<!DOCTYPE html>
 <div class="verses" id="verses"></div>
 <div class="mushaf-pages" id="mushafPages"></div>
 <div class="morph-tip" id="morphTip"></div>
+<div class="word-inspector" id="wordInspector">
+  <button class="wi-close" id="wiClose" aria-label="Close word inspector">&times;</button>
+  <div class="wi-body" id="wiBody"></div>
+</div>
 
 <div class="controls">
   <div class="scrubber" id="scrubber"></div>
@@ -796,6 +883,7 @@ function renderVerse(v, idx) {
       wordSpan.addEventListener('mouseleave', hideMorphTip);
       wordSpan.addEventListener('focus', () => showMorphTip(wordSpan, morph));
       wordSpan.addEventListener('blur', hideMorphTip);
+      wordSpan.addEventListener('click', () => showInspector(wordSpan, morph, v, wIdx));
     }
     textEl.appendChild(wordSpan);
     textEl.appendChild(document.createTextNode(' '));
@@ -862,7 +950,12 @@ function renderMushafPages() {
     const header = document.createElement('div');
     header.className = 'mushaf-page-header';
     const juz = g.verses[0].juz;
-    header.textContent = (g.page ? 'PAGE ' + g.page : '') + (juz ? '   ·   JUZ ' + juz : '');
+    const hizb = g.verses[0].hizb;
+    const manzil = g.verses[0].manzil;
+    header.textContent = (g.page ? 'PAGE ' + g.page : '')
+      + (juz ? '   ·   JUZ ' + juz : '')
+      + (hizb ? '   ·   HIZB ' + hizb : '')
+      + (manzil ? '   ·   MANZIL ' + manzil : '');
     pageDiv.appendChild(header);
 
     if (gi === 0 && sMeta && sMeta.bismillahPre && currentSurah !== 1) {
@@ -931,9 +1024,9 @@ function toArabicDigits(n) {
   return String(n).split('').map(d => map[+d] ?? d).join('');
 }
 
-function makeBreak(label, isPage) {
+function makeBreak(label, isPage, isMinor) {
   const div = document.createElement('div');
-  div.className = 'qusx-break' + (isPage ? ' page' : '');
+  div.className = 'qusx-break' + (isPage ? ' page' : '') + (isMinor ? ' minor' : '');
   const ln1 = document.createElement('div');
   ln1.className = 'ln';
   const lbl = document.createElement('div');
@@ -965,16 +1058,25 @@ function renderAll() {
     b.textContent = 'بِسْمِ اللَّهِ الرَّحْمَـٰنِ الرَّحِيمِ';
     versesEl.appendChild(b);
   }
-  let prevJuz = null, prevPage = null, prevRuku = null;
+  let prevJuz = null, prevPage = null, prevRuku = null, prevManzil = null, prevHizb = null, prevRub = null;
   VERSES.forEach((v, idx) => {
     const labels = [];
     if (v.page && v.page !== prevPage) labels.push({ text: 'PAGE ' + v.page, page: true });
+    if (v.manzil && v.manzil !== prevManzil) labels.push({ text: 'MANZIL ' + v.manzil, page: true });
     if (v.juz && v.juz !== prevJuz) labels.push({ text: 'JUZ ' + v.juz, page: false });
-    for (const l of labels) versesEl.appendChild(makeBreak(l.text, l.page));
+    if (v.hizb && v.hizb !== prevHizb) labels.push({ text: 'HIZB ' + v.hizb, page: false });
+    // Rub (240 total, ~every 26 ayahs) is the finest-grained milestone shown —
+    // rendered as a subtler "minor" break so it doesn't visually compete with
+    // the coarser juz/hizb/page/manzil axes at every occurrence.
+    if (v.rub && v.rub !== prevRub) labels.push({ text: 'RUB ' + v.rub, page: false, minor: true });
+    for (const l of labels) versesEl.appendChild(makeBreak(l.text, l.page, l.minor));
     if (v.ruku && v.ruku !== prevRuku && !labels.length) versesEl.appendChild(makeRukuMark(v.ruku));
     prevJuz = v.juz;
     prevPage = v.page;
     prevRuku = v.ruku;
+    prevManzil = v.manzil;
+    prevHizb = v.hizb;
+    prevRub = v.rub;
     versesEl.appendChild(renderVerse(v, idx));
   });
   renderMushafPages();
@@ -1030,6 +1132,7 @@ async function loadSurah(num) {
   loadStatusEl.textContent = 'Loading ' + meta.name + '…';
   loadStatusEl.classList.remove('error');
   audio.pause();
+  hideInspector(); // the previously-inspected word's DOM node is about to be discarded by renderAll()
 
   try {
     const offset = SURAH_OFFSET[num];
@@ -1177,6 +1280,33 @@ function showMorphTip(wordSpan, morph) {
 function hideMorphTip() {
   morphTipEl.classList.remove('show');
 }
+
+// Word inspector — click-to-pin panel (persistent, unlike the hover-only
+// tooltip above). Only one word is ever "inspected" at a time; clicking a
+// new word replaces the panel contents and moves the highlight ring.
+const wordInspectorEl = document.getElementById('wordInspector');
+const wiBodyEl = document.getElementById('wiBody');
+const wiCloseBtn = document.getElementById('wiClose');
+let inspectedWordEl = null;
+function showInspector(wordSpan, morph, v, wIdx) {
+  if (inspectedWordEl) inspectedWordEl.classList.remove('inspected');
+  inspectedWordEl = wordSpan;
+  wordSpan.classList.add('inspected');
+  wiBodyEl.innerHTML =
+    '<div class="wi-arabic">' + morph.text + '</div>' +
+    '<div class="wi-ref">' + v.surah + ':' + v.ayah + ' &middot; word ' + wIdx + '</div>' +
+    '<div class="wi-row"><span class="wi-label">root</span><span class="wi-value">' + (morph.root || '&mdash;') + '</span></div>' +
+    '<div class="wi-row"><span class="wi-label">stem</span><span class="wi-value">' + (morph.stem || '&mdash;') + '</span></div>' +
+    '<div class="wi-row"><span class="wi-label">lemma</span><span class="wi-value">' + (morph.lemma || '&mdash;') + '</span></div>' +
+    (morph.id ? '<div class="wi-row"><span class="wi-label">word id</span><span class="wi-value mono">' + morph.id + '</span></div>' : '');
+  wordInspectorEl.classList.add('show');
+}
+function hideInspector() {
+  wordInspectorEl.classList.remove('show');
+  if (inspectedWordEl) inspectedWordEl.classList.remove('inspected');
+  inspectedWordEl = null;
+}
+wiCloseBtn.addEventListener('click', hideInspector);
 
 function clearHighlights() {
   document.querySelectorAll('.letter.lit').forEach(el => el.classList.remove('lit'));
