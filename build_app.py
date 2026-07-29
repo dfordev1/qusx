@@ -21,6 +21,15 @@ glyph_v2_json = open(os.path.join(_DIR, 'qpc_v2_glyphs.json'), encoding='utf-8')
 reciters = json.load(open(os.path.join(_DIR, 'reciters.json'), encoding='utf-8'))
 reciters_json = json.dumps(reciters, ensure_ascii=False)
 
+# Per-surah ayah-count deltas across qira'at/riwayah numbering traditions
+# (Warsh, Qalun, Ad-Duri, Shu'bah — QUSX's "pilot" traditions; see usxv2's
+# data/diff-report.json), only for the 55 surahs where a tradition's count
+# actually differs from Hafs/Kufi. QUSX's own pilot text/audio isn't
+# synced to this app's Hafs-indexed recitation timing, so this is a
+# display-only numbering comparison, not a full alternate-tradition read.
+tradition_diffs = json.load(open(os.path.join(_DIR, 'tradition_diffs.json'), encoding='utf-8'))
+tradition_diffs_json = json.dumps(tradition_diffs, ensure_ascii=False)
+
 html = """<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -570,9 +579,19 @@ html = """<!DOCTYPE html>
     color: var(--text-muted);
     font-size: 12px;
     min-height: 16px;
-    margin-bottom: 18px;
+    margin-bottom: 4px;
   }
   .load-status.error { color: #e05858; }
+  .tradition-info {
+    font-family: monospace;
+    font-size: 10.5px;
+    color: var(--text-muted);
+    opacity: 0.7;
+    margin-bottom: 18px;
+    max-width: 760px;
+    text-align: center;
+  }
+  .tradition-info.diverges { color: var(--accent); opacity: 0.9; }
 </style>
 </head>
 <body>
@@ -585,6 +604,7 @@ html = """<!DOCTYPE html>
   <button class="theme-toggle" id="themeToggle" title="Toggle light/dark" aria-label="Toggle light/dark theme">&#9789;</button>
 </div>
 <div class="load-status" id="loadStatus">&nbsp;</div>
+<div class="tradition-info" id="traditionInfo"></div>
 <div class="subtitle">data from <a href="https://huggingface.co/datasets/hetchyy/quranic-universal-ayahs" target="_blank">Qur'anic Universal Audio</a> (36 reciters) &middot; text &amp; word morphology from <a href="https://github.com/dfordev1/usxv2" target="_blank">QUSX</a> &middot; Mushaf glyphs &amp; tajweed colors from <a href="https://qul.tarteel.ai" target="_blank">Tarteel QUL</a></div>
 
 <div class="verses" id="verses"></div>
@@ -679,6 +699,14 @@ async function ensureTajweedFont(page) {
 
 const RECITERS = __RECITERS_JSON__; // [config, displayName][] — all 36 reciters in the QUA dataset (hetchyy/quranic-universal-ayahs)
 let RECITER_CONFIG = RECITERS[8][0]; // default: Abu Bakr Al-Shatri
+
+// Per-surah ayah-count deltas across qira'at numbering traditions (Warsh,
+// Qalun, Ad-Duri, Shu'bah vs Hafs/Kufi) — only the 55 surahs where they
+// actually diverge; a surah absent from this map counts identically in
+// every tradition. From QUSX's own data/diff-report.json.
+const TRADITION_DIFFS = __TRADITION_DIFFS_JSON__;
+const TRADITION_DIFFS_BY_SURAH = {};
+for (const entry of TRADITION_DIFFS) TRADITION_DIFFS_BY_SURAH[entry.surah] = entry;
 
 // cumulative row offset per surah, for jumping straight to any surah's rows
 // in the HF datasets-server API without paging through the whole dataset
@@ -1363,10 +1391,32 @@ async function loadSurah(num) {
     refreshInfoBar(0);
     if (browsing) exitBrowse();
     loadStatusEl.textContent = meta.ayahCount + ' verses loaded — ' + meta.nameArabic;
+    refreshTraditionInfo(num, meta.ayahCount);
   } catch (err) {
     loadStatusEl.textContent = 'Could not load ' + meta.name + ': ' + err.message;
     loadStatusEl.classList.add('error');
   }
+}
+
+// Numbering-only comparison against the pilot Warsh/Qalun/Ad-Duri/Shu'bah
+// traditions — see TRADITION_DIFFS above. Not a full alternate-tradition
+// read (no synced text/audio for those traditions), just surfacing the
+// classical ʿadd al-āy (ayah-counting) divergence QUSX itself documents.
+const TRADITION_LABELS = { qalon_kfqc: 'Qalun', qalon_libya: 'Qalun (Libya)', warsh_kfqc: 'Warsh', douri_kfqc: 'Ad-Duri', shubah_kfqc: "Shu'bah" };
+const traditionInfoEl = document.getElementById('traditionInfo');
+function refreshTraditionInfo(surahNum, hafsCount) {
+  const diff = TRADITION_DIFFS_BY_SURAH[surahNum];
+  if (!diff) {
+    traditionInfoEl.textContent = 'Ayah count (' + hafsCount + ') is the same across every counted tradition';
+    traditionInfoEl.classList.remove('diverges');
+    return;
+  }
+  const parts = ['Hafs ' + diff.counts.hafs_kfqc];
+  for (const [key, label] of Object.entries(TRADITION_LABELS)) {
+    if (key in diff.counts) parts.push(label + ' ' + diff.counts[key]);
+  }
+  traditionInfoEl.textContent = 'Ayah count by tradition (numbering only): ' + parts.join(' · ');
+  traditionInfoEl.classList.add('diverges');
 }
 
 function jumpToVerse(idx, autoplay) {
@@ -1687,6 +1737,7 @@ loadSurah(1);
 html = html.replace('__SURAH_INDEX_JSON__', surah_index_json)
 html = html.replace('__GLYPH_V2_JSON__', glyph_v2_json)
 html = html.replace('__RECITERS_JSON__', reciters_json)
+html = html.replace('__TRADITION_DIFFS_JSON__', tradition_diffs_json)
 with open(os.path.join(_DIR, 'index.html'), 'w', encoding='utf-8') as f:
     f.write(html)
 print('written', len(html), 'bytes')
