@@ -558,6 +558,7 @@
 <div class="surah-picker">
   <select id="surahSelect"></select>
   <select id="reciterSelect"></select>
+  <select id="layoutSelect" title="Print layout — changes page/line breaks; only Madani V2 has real calligraphic glyphs"></select>
   <button class="theme-toggle" id="themeToggle" title="Toggle light/dark" aria-label="Toggle light/dark theme">&#9789;</button>
 </div>
 <div class="load-status" id="loadStatus">&nbsp;</div>
@@ -666,6 +667,27 @@ let VERSES = [];        // current surah's verses, fetched live
 let MORPHOLOGY = {};    // 'ayah:position' -> {root,stem,lemma,text}, fetched live from QUSX
 let currentSurah = 1;
 
+// QUSX ships the SAME word text/morphology across all 10 print layouts —
+// only page/line placement differs per real print edition (see the layout
+// table in usxv2's README). Real calligraphic QCF glyphs + tajweed COLRv1
+// fonts are only bundled here for madani-v2 (qpc_v2_glyphs.json); every
+// other layout still gets its OWN authentic page/line wraps (fetched live
+// from that layout's own .qusx.xml), just rendered in plain Uthmani text
+// instead of precomposed glyphs.
+const LAYOUTS = [
+  ['madani-v2', 'Madani V2 (KFGQPC, glyphs)'],
+  ['madani-v1', 'Madani V1 (KFGQPC 1405H)'],
+  ['madani-v4-tajweed', 'Madani V4 Tajweed'],
+  ['qatar', 'Mushaf Qatar'],
+  ['indopak-15', 'IndoPak 15-line'],
+  ['indopak-9-gaba', 'IndoPak 9-line (Gaba)'],
+  ['indopak-13-qudratullah', 'IndoPak 13-line (Qudratullah)'],
+  ['indopak-13-taj', 'IndoPak 13-line (Taj Co.)'],
+  ['indopak-16-taj', 'IndoPak 16-line (Taj Co.)'],
+  ['nastaleeq', 'KFGQPC Nastaleeq 15-line'],
+];
+let currentLayout = 'madani-v2';
+
 let mode = 'letter'; // 'letter' | 'word' | 'mushaf'
 let tajweedOn = false; // Mushaf-mode-only: colored tajweed rules via QCF V4
 let currentVerseIdx = 0;
@@ -712,6 +734,26 @@ reciterSelect.addEventListener('change', () => {
   loadSurah(currentSurah); // same surah, new reciter's audio/timing
 });
 refreshReciterInfo();
+
+const layoutSelect = document.getElementById('layoutSelect');
+LAYOUTS.forEach(([key, name]) => {
+  const opt = document.createElement('option');
+  opt.value = key;
+  opt.textContent = name;
+  if (key === currentLayout) opt.selected = true;
+  layoutSelect.appendChild(opt);
+});
+layoutSelect.addEventListener('change', () => {
+  currentLayout = layoutSelect.value;
+  loadedPageFonts.clear();     // glyph fonts are keyed by page number, which means something different per layout
+  loadedTajweedFonts.clear();
+  if (currentLayout !== 'madani-v2') {
+    tajweedOn = false;
+    tajweedBtn.classList.remove('on');
+  }
+  tajweedBtn.disabled = mode !== 'mushaf' || currentLayout !== 'madani-v2';
+  loadSurah(currentSurah); // same surah, this layout's own page/line pins
+});
 
 // Theme toggle — the actual data-theme attribute was already set pre-paint
 // by the inline script in <head>; this just wires up the button and
@@ -935,6 +977,31 @@ function buildMushafGlyphSpan(v, wIdx, wordStart) {
   return gSpan;
 }
 
+// Fallback for the 9 non-madani-v2 layouts, which have no bundled QCF glyph
+// font: plain Uthmani text per word instead of a precomposed glyph, but
+// still laid out against THIS layout's own real page/line pins (fetched
+// from that layout's own .qusx.xml) — so the wrap points are authentic to
+// that print edition even though the letterforms aren't calligraphic.
+// Kept on the same "mushaf-glyph" class so the existing active-word
+// highlight selectors (by data-word/data-ayah) work unchanged.
+function buildMushafPlainSpan(v, wIdx, wordText, wordStart) {
+  if (!wordText) return null;
+  const gSpan = document.createElement('span');
+  gSpan.className = 'word mushaf-glyph';
+  gSpan.dataset.word = wIdx;
+  gSpan.dataset.ayah = v.ayah;
+  gSpan.textContent = wordText;
+  if (wordStart != null) {
+    gSpan.addEventListener('click', (e) => {
+      e.stopPropagation();
+      audio.currentTime = wordStart / 1000;
+      audio.play();
+      jumpToVerse(VERSES.indexOf(v), false);
+    });
+  }
+  return gSpan;
+}
+
 function renderMushafPages() {
   mushafPagesEl.innerHTML = '';
   if (!VERSES.length) return;
@@ -974,9 +1041,12 @@ function renderMushafPages() {
 
     const flow = document.createElement('div');
     flow.className = 'verse-text mushaf-text';
-    if (g.page) {
+    const isV2 = currentLayout === 'madani-v2';
+    if (isV2 && g.page) {
       const family = tajweedOn ? 'QCFT' + g.page : 'QCFP' + g.page;
       flow.style.fontFamily = family + ', "Traditional Arabic", serif';
+    } else if (!isV2) {
+      flow.style.fontFamily = "'UthmanicHafs', 'Traditional Arabic', 'Scheherazade New', serif";
     }
 
     let curLineNum = null;
@@ -995,22 +1065,34 @@ function renderMushafPages() {
           flow.appendChild(lineDiv);
           curLineNum = thisLine;
         }
-        const gSpan = buildMushafGlyphSpan(v, wIdx, wordTimeMs.has(wIdx) ? wordTimeMs.get(wIdx) : null);
+        const wordStart = wordTimeMs.has(wIdx) ? wordTimeMs.get(wIdx) : null;
+        const gSpan = isV2
+          ? buildMushafGlyphSpan(v, wIdx, wordStart)
+          : buildMushafPlainSpan(v, wIdx, qusxWords[wIdx - 1], wordStart);
         if (gSpan) {
           lineDiv.appendChild(gSpan);
           lineDiv.appendChild(document.createTextNode(' '));
         }
       }
-      // The font's own trailing ayah-number glyph — the real mushaf's
-      // ornamental end-of-verse marker, non-interactive (no audio of its
-      // own), inline right after the verse's last word like the real page.
-      const glyphWords = (GLYPH_V2[v.surah] || {})[v.ayah] || [];
-      const numGlyph = glyphWords[glyphWords.length - 1];
-      if (numGlyph && lineDiv) {
-        const numSpan = document.createElement('span');
-        numSpan.className = 'mushaf-num-glyph';
-        numSpan.textContent = numGlyph;
-        lineDiv.appendChild(numSpan);
+      if (isV2) {
+        // The font's own trailing ayah-number glyph — the real mushaf's
+        // ornamental end-of-verse marker, non-interactive (no audio of its
+        // own), inline right after the verse's last word like the real page.
+        const glyphWords = (GLYPH_V2[v.surah] || {})[v.ayah] || [];
+        const numGlyph = glyphWords[glyphWords.length - 1];
+        if (numGlyph && lineDiv) {
+          const numSpan = document.createElement('span');
+          numSpan.className = 'mushaf-num-glyph';
+          numSpan.textContent = numGlyph;
+          lineDiv.appendChild(numSpan);
+        }
+      } else if (lineDiv) {
+        // No glyph font for this layout's ayah-number ornament — fall back
+        // to the same plain circled-digit marker classic mode uses.
+        const pin = document.createElement('span');
+        pin.className = 'ayah-pin';
+        pin.textContent = toArabicDigits(v.ayah);
+        lineDiv.appendChild(pin);
       }
       if (v.sajda && lineDiv) {
         const badge = document.createElement('span');
@@ -1144,7 +1226,7 @@ async function loadSurah(num) {
   try {
     const offset = SURAH_OFFSET[num];
     const length = meta.ayahCount;
-    const xmlUrl = 'https://raw.githubusercontent.com/dfordev1/usxv2/main/output/madani-v2/'
+    const xmlUrl = 'https://raw.githubusercontent.com/dfordev1/usxv2/main/output/' + currentLayout + '/'
       + String(num).padStart(3, '0') + '.qusx.xml';
 
     const [rows, xmlRes] = await Promise.all([fetchAllRows(offset, length), fetch(xmlUrl)]);
@@ -1241,10 +1323,14 @@ async function loadSurah(num) {
 
     // Load every distinct mushaf page's own font before rendering, so
     // Mushaf mode doesn't flash tofu-then-glyphs for the pages this surah
-    // touches (usually 1-2, up to ~20 for very long surahs).
-    const pages = [...new Set(VERSES.map(v => v.page).filter(Boolean))];
-    await Promise.all(pages.map(ensurePageFont));
-    if (tajweedOn) await Promise.all(pages.map(ensureTajweedFont));
+    // touches (usually 1-2, up to ~20 for very long surahs). Only madani-v2
+    // has bundled QCF glyph/tajweed fonts — every other layout renders in
+    // plain Uthmani text, so there's nothing page-specific to preload.
+    if (currentLayout === 'madani-v2') {
+      const pages = [...new Set(VERSES.map(v => v.page).filter(Boolean))];
+      await Promise.all(pages.map(ensurePageFont));
+      if (tajweedOn) await Promise.all(pages.map(ensureTajweedFont));
+    }
 
     renderAll();
     audio.src = VERSES[0].audio;
@@ -1485,7 +1571,7 @@ document.getElementById('modeWord').addEventListener('click', () => setMode('wor
 document.getElementById('modeMushaf').addEventListener('click', () => setMode('mushaf'));
 const tajweedBtn = document.getElementById('tajweedToggle');
 tajweedBtn.addEventListener('click', async () => {
-  if (mode !== 'mushaf') return;
+  if (mode !== 'mushaf' || currentLayout !== 'madani-v2') return; // COLRv1 tajweed font only exists for madani-v2
   tajweedOn = !tajweedOn;
   tajweedBtn.classList.toggle('on', tajweedOn);
   if (tajweedOn) {
@@ -1506,7 +1592,7 @@ function setMode(m) {
   // classic per-verse cards — so swap the whole container, not a class.
   versesEl.style.display = m === 'mushaf' ? 'none' : 'flex';
   mushafPagesEl.style.display = m === 'mushaf' ? 'flex' : 'none';
-  tajweedBtn.disabled = m !== 'mushaf';
+  tajweedBtn.disabled = m !== 'mushaf' || currentLayout !== 'madani-v2';
   clearHighlights();
 }
 
