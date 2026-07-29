@@ -1,6 +1,9 @@
 import json
+import os
 
-surah_index = json.load(open('/home/claude/surah_index.json'))  # 114 entries: num, name, nameArabic, ayahCount
+_DIR = os.path.dirname(os.path.abspath(__file__))
+
+surah_index = json.load(open(os.path.join(_DIR, 'surah_index.json'), encoding='utf-8'))  # 114 entries: num, name, nameArabic, ayahCount
 surah_index_json = json.dumps(surah_index, ensure_ascii=False)
 
 # QPC V2 glyph data (Tarteel QUL, "QPC V2 Glyph - Word by Word"): for each
@@ -9,13 +12,13 @@ surah_index_json = json.dumps(surah_index, ensure_ascii=False)
 # and the trailing extra entry (beyond QUSX's real word count) is the
 # ornamental ayah-end number glyph baked into the font itself, matching a
 # real mushaf page rather than our own drawn ayah-pin circle.
-glyph_v2_json = open('/home/claude/qpc_v2_glyphs.json', encoding='utf-8').read()
+glyph_v2_json = open(os.path.join(_DIR, 'qpc_v2_glyphs.json'), encoding='utf-8').read()
 
 # All 36 reciter configs available in the QUA dataset (hetchyy/quranic-
 # universal-ayahs), with a readable display name for each — the raw HF
 # config slugs are source-tagged machine names (e.g. "..._mp3quran",
 # "..._tarteel", "..._qdc"), not meant for display.
-reciters = json.load(open('/home/claude/reciters.json'))
+reciters = json.load(open(os.path.join(_DIR, 'reciters.json'), encoding='utf-8'))
 reciters_json = json.dumps(reciters, ensure_ascii=False)
 
 html = """<!DOCTYPE html>
@@ -24,6 +27,16 @@ html = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Qur'an Follow-Along — Letter Highlighting</title>
+<script>
+  // Applied before first paint so there's no dark-then-light flash: an
+  // explicit prior choice (localStorage) wins, otherwise fall back to the
+  // OS-level prefers-color-scheme, defaulting to dark if neither is set.
+  (function () {
+    var saved = localStorage.getItem('quran-theme');
+    var theme = saved || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    document.documentElement.setAttribute('data-theme', theme);
+  })();
+</script>
 <style>
   :root {
     --bg: #0c0e13;
@@ -36,6 +49,24 @@ html = """<!DOCTYPE html>
     --accent-2: #d99a3d;
     --accent-soft: rgba(232, 191, 63, 0.16);
     --shadow: 0 10px 30px rgba(0,0,0,0.35);
+    --bg-glow: rgba(232,191,63,0.06);
+  }
+  /* Light theme: same accent hue, flipped surfaces/text — applied via
+     data-theme on <html> (see the theme-toggle script near the bottom),
+     never via prefers-color-scheme alone, so the user's explicit choice
+     (stored in localStorage) always wins over the OS setting. */
+  :root[data-theme="light"] {
+    --bg: #f7f4ec;
+    --surface: #ffffff;
+    --surface-2: #f1ede2;
+    --border: #ded6c2;
+    --text: #241f14;
+    --text-muted: #7a7360;
+    --accent: #b8862a;
+    --accent-2: #9c6f22;
+    --accent-soft: rgba(184, 134, 42, 0.14);
+    --shadow: 0 10px 30px rgba(36,31,20,0.10);
+    --bg-glow: rgba(184,134,42,0.08);
   }
   /* The real Uthmani Quranic script (QPC "Uthmanic Hafs"), NOT the QCF
      glyph-per-word mushaf font used in Mushaf mode — this is a normal
@@ -53,7 +84,7 @@ html = """<!DOCTYPE html>
   body {
     margin: 0;
     background:
-      radial-gradient(ellipse 900px 500px at 50% -10%, rgba(232,191,63,0.06), transparent),
+      radial-gradient(ellipse 900px 500px at 50% -10%, var(--bg-glow), transparent),
       var(--bg);
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -62,6 +93,7 @@ html = """<!DOCTYPE html>
     flex-direction: column;
     align-items: center;
     padding: 28px 16px 140px;
+    transition: background-color 0.2s, color 0.2s;
   }
   h1 {
     font-size: 17px;
@@ -405,6 +437,22 @@ html = """<!DOCTYPE html>
     transition: border-color 0.15s;
   }
   .surah-picker select:hover, .surah-picker select:focus { border-color: var(--accent); outline: none; }
+  .theme-toggle {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 10px;
+    width: 36px;
+    height: 36px;
+    font-size: 15px;
+    cursor: pointer;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: border-color 0.15s;
+  }
+  .theme-toggle:hover { border-color: var(--accent); }
   .load-status {
     color: var(--text-muted);
     font-size: 12px;
@@ -420,6 +468,7 @@ html = """<!DOCTYPE html>
 <div class="surah-picker">
   <select id="surahSelect"></select>
   <select id="reciterSelect"></select>
+  <button class="theme-toggle" id="themeToggle" title="Toggle light/dark" aria-label="Toggle light/dark theme">&#9789;</button>
 </div>
 <div class="load-status" id="loadStatus">&nbsp;</div>
 <div class="subtitle">data from <a href="https://huggingface.co/datasets/hetchyy/quranic-universal-ayahs" target="_blank">Qur'anic Universal Audio</a> (36 reciters) &middot; text &amp; word morphology from <a href="https://github.com/dfordev1/usxv2" target="_blank">QUSX</a> &middot; Mushaf glyphs &amp; tajweed colors from <a href="https://qul.tarteel.ai" target="_blank">Tarteel QUL</a></div>
@@ -569,6 +618,23 @@ reciterSelect.addEventListener('change', () => {
   loadSurah(currentSurah); // same surah, new reciter's audio/timing
 });
 refreshReciterInfo();
+
+// Theme toggle — the actual data-theme attribute was already set pre-paint
+// by the inline script in <head>; this just wires up the button and
+// persists explicit user choices, which always beat the OS preference.
+const themeToggleBtn = document.getElementById('themeToggle');
+function refreshThemeIcon() {
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  themeToggleBtn.innerHTML = isLight ? '&#9788;' : '&#9789;'; // sun : moon
+  themeToggleBtn.title = isLight ? 'Switch to dark mode' : 'Switch to light mode';
+}
+themeToggleBtn.addEventListener('click', () => {
+  const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('quran-theme', next);
+  refreshThemeIcon();
+});
+refreshThemeIcon();
 
 function fmtTime(ms) {
   const s = Math.floor(ms / 1000);
@@ -1310,6 +1376,6 @@ loadSurah(1);
 html = html.replace('__SURAH_INDEX_JSON__', surah_index_json)
 html = html.replace('__GLYPH_V2_JSON__', glyph_v2_json)
 html = html.replace('__RECITERS_JSON__', reciters_json)
-with open('/home/claude/quran_followalong.html', 'w', encoding='utf-8') as f:
+with open(os.path.join(_DIR, 'index.html'), 'w', encoding='utf-8') as f:
     f.write(html)
 print('written', len(html), 'bytes')
