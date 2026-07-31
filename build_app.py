@@ -1256,7 +1256,7 @@ function renderMushafPages() {
     } else if (withLetters) {
       flow.style.fontFamily = "'Scheherazade New', 'Traditional Arabic', 'UthmanicHafs', serif";
     } else if (profile.unicodeFamily) {
-      flow.style.fontFamily = "'" + profile.unicodeFamily + "', 'UthmanicHafs', 'Traditional Arabic', serif';
+      flow.style.fontFamily = "'" + profile.unicodeFamily + "', 'UthmanicHafs', 'Traditional Arabic', serif";
       if (profile.unicodeFamily === 'IndoPakNastaleeq' || profile.unicodeFamily === 'KFGQPCNastaleeq') {
         flow.classList.add('is-nastaleeq');
       }
