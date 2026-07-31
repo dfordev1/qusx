@@ -285,6 +285,18 @@ html = """<!DOCTYPE html>
     justify-content: flex-start;
     gap: 0.35em;
   }
+  /* Letter/Word hybrid: same page/line shell as Mushaf, but real Uthmani
+     letters so phoneme highlighting still works. */
+  .mushaf-text.with-letters {
+    font-family: 'UthmanicHafs', "Traditional Arabic", "Scheherazade New", serif;
+  }
+  .mushaf-line .word {
+    display: inline-block;
+    flex: 0 0 auto;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+  .mushaf-line .word .letter { display: inline; }
   .mushaf-glyph {
     display: inline-block;
     flex: 0 0 auto;
@@ -879,7 +891,95 @@ function buildClusters(text) {
 
 let flatLetters = []; // built up across all verses while rendering, for letter-browse mode; reset per surah load
 
+// Build one timed word span with per-letter children (Letter/Word hybrid).
+// Shared by the mushaf-page letter layout so phoneme highlighting works
+// inside a continuous page, not only inside classic verse cards.
+function getVerseLetterRuns(v) {
+  if (v._letterRuns) return v._letterRuns;
+  const letters = v.letters;
+  const n = letters.word_idx.length;
+  const firstRunByWord = new Map();
+  const extraWindowsByWord = new Map();
+  let i = 0;
+  while (i < n) {
+    const wIdx = letters.word_idx[i];
+    const start = i;
+    while (i < n && letters.word_idx[i] === wIdx) i++;
+    const run = { wIdx, start, end: i };
+    if (!firstRunByWord.has(wIdx)) {
+      firstRunByWord.set(wIdx, run);
+    } else {
+      const absStart = v.source_offset_ms + letters.start_ms[run.start];
+      const absEnd = v.source_offset_ms + letters.end_ms[run.end - 1];
+      if (!extraWindowsByWord.has(wIdx)) extraWindowsByWord.set(wIdx, []);
+      extraWindowsByWord.get(wIdx).push([absStart, absEnd]);
+    }
+  }
+  v._letterRuns = { firstRunByWord, extraWindowsByWord };
+  return v._letterRuns;
+}
+
+function buildTimedWordSpan(v, wIdx, verseIdx) {
+  const letters = v.letters;
+  const { firstRunByWord, extraWindowsByWord } = getVerseLetterRuns(v);
+  const run = firstRunByWord.get(wIdx);
+  if (!run) return null;
+
+  const qusxWords = v.qusxWords || [];
+  const wordClusters = buildClusters(qusxWords[wIdx - 1] || '');
+  const useClusters = wordClusters.length === (run.end - run.start);
+
+  const wordSpan = document.createElement('span');
+  wordSpan.className = 'word';
+  wordSpan.dataset.word = wIdx;
+  wordSpan.dataset.ayah = v.ayah;
+  let wordStart = null;
+  for (let j = run.start; j < run.end; j++) {
+    const ch = document.createElement('span');
+    ch.className = 'letter';
+    const absStart = v.source_offset_ms + letters.start_ms[j];
+    const absEnd = v.source_offset_ms + letters.end_ms[j];
+    if (wordStart === null) wordStart = absStart;
+    ch.dataset.start = absStart;
+    ch.dataset.end = absEnd;
+    ch.dataset.word = wIdx;
+    ch.dataset.ayah = v.ayah;
+    ch.dataset.gidx = flatLetters.length;
+    ch.textContent = useClusters ? wordClusters[j - run.start] : letters.char[j];
+    flatLetters.push({ verseIdx, verse: v, startMs: absStart, endMs: absEnd, char: ch.textContent });
+    wordSpan.appendChild(ch);
+  }
+  const extraWindows = extraWindowsByWord.get(wIdx);
+  if (extraWindows) {
+    const json = JSON.stringify(extraWindows);
+    wordSpan.dataset.extraWindows = json;
+    wordSpan.querySelectorAll('.letter').forEach(el => { el.dataset.extraWindows = json; });
+  }
+  if (wordStart != null) {
+    wordSpan.dataset.startMs = wordStart;
+    wordSpan.addEventListener('click', (e) => {
+      e.stopPropagation();
+      audio.currentTime = wordStart / 1000;
+      audio.play();
+      jumpToVerse(verseIdx, false);
+    });
+  }
+  const morph = MORPHOLOGY[v.ayah + ':' + wIdx];
+  if (morph) {
+    wordSpan.classList.add('has-morph');
+    wordSpan.tabIndex = 0;
+    wordSpan.addEventListener('mouseenter', () => showMorphTip(wordSpan, morph));
+    wordSpan.addEventListener('mouseleave', hideMorphTip);
+    wordSpan.addEventListener('focus', () => showMorphTip(wordSpan, morph));
+    wordSpan.addEventListener('blur', hideMorphTip);
+    wordSpan.addEventListener('click', () => showInspector(wordSpan, morph, v, wIdx));
+  }
+  return wordSpan;
+}
+
 function renderVerse(v, idx) {
+  // Legacy per-ayah card renderer — kept for reference but unused: Letter/Word
+  // now share the continuous mushaf page shell (see renderMushafPages).
   const div = document.createElement('div');
   div.className = 'verse';
   div.dataset.idx = idx;
@@ -898,112 +998,20 @@ function renderVerse(v, idx) {
   const textEl = document.createElement('div');
   textEl.className = 'verse-text classic-text';
 
-  const letters = v.letters;
-  const n = letters.word_idx.length;
-
-  // Some recordings genuinely re-recite part of an ayah (a reciter retake/
-  // repetition) — QUA's "repetition-aware" pipeline preserves BOTH takes in
-  // the timing arrays (letters.word_idx can revisit the same word number in
-  // a second, non-contiguous run), while the canonical QUSX text has each
-  // word once. Walking that against one flat whole-ayah cluster array made
-  // every letter after the repeat point drift onto the wrong glyph — split
-  // words, garbled joining, duplicated-looking phrases. Fix: split into
-  // contiguous "runs" of the same word_idx (each run = one spoken take of
-  // that word); render visible letter cells only for a word's FIRST run
-  // (scoping cluster-building to just that one word, not the whole ayah —
-  // so a mismatch anywhere can never corrupt a different word), and record
-  // any later repeat run purely as an extra time-window so the same on-
-  // screen cell still lights up correctly when the reciter repeats it.
-  const runs = [];
-  {
-    let i = 0;
-    while (i < n) {
-      const wIdx = letters.word_idx[i];
-      const start = i;
-      while (i < n && letters.word_idx[i] === wIdx) i++;
-      runs.push({ wIdx, start, end: i });
-    }
-  }
-  const firstRunByWord = new Map();
-  const extraWindowsByWord = new Map(); // wIdx -> [[absStart,absEnd], ...] from repeat takes
-  for (const run of runs) {
-    if (!firstRunByWord.has(run.wIdx)) {
-      firstRunByWord.set(run.wIdx, run);
-    } else {
-      const absStart = v.source_offset_ms + letters.start_ms[run.start];
-      const absEnd = v.source_offset_ms + letters.end_ms[run.end - 1];
-      if (!extraWindowsByWord.has(run.wIdx)) extraWindowsByWord.set(run.wIdx, []);
-      extraWindowsByWord.get(run.wIdx).push([absStart, absEnd]);
-    }
-  }
-
-  // NOT re-derived by splitting v.text on spaces — a QUSX word can itself
-  // contain an embedded space (e.g. "لَكُمْ ۗ", the word plus its trailing
-  // pause mark), which would silently shift every later word's index by one.
-  const qusxWords = v.qusxWords;
-
-  // QUSX's own mushaf line boundaries, captured per word position while
-  // walking the XML (<line number="N".../> pins) — used to force real
-  // print-accurate line wraps inside a verse, not just at ayah edges.
   const wordLines = v.wordLines || [];
   let lastLine = wordLines.length ? wordLines[0] : null;
-
-  const sortedWordIdx = [...firstRunByWord.keys()].sort((a, b) => a - b);
-  for (const wIdx of sortedWordIdx) {
+  const qusxWords = v.qusxWords || [];
+  for (let wIdx = 1; wIdx <= qusxWords.length; wIdx++) {
     const thisLine = wordLines[wIdx - 1];
     if (thisLine != null && lastLine != null && thisLine !== lastLine) {
       textEl.appendChild(document.createElement('br'));
     }
     lastLine = thisLine != null ? thisLine : lastLine;
-    const run = firstRunByWord.get(wIdx);
-    // fall back to bare consonants only for THIS word if its own cluster
-    // count doesn't match its own letter count — never lets a mismatch
-    // bleed into neighboring words
-    const wordClusters = buildClusters(qusxWords[wIdx - 1] || '');
-    const useClusters = wordClusters.length === (run.end - run.start);
-
-    const wordSpan = document.createElement('span');
-    wordSpan.className = 'word';
-    wordSpan.dataset.word = wIdx;
-    let wordStart = null;
-    for (let j = run.start; j < run.end; j++) {
-      const ch = document.createElement('span');
-      ch.className = 'letter';
-      const absStart = v.source_offset_ms + letters.start_ms[j];
-      const absEnd = v.source_offset_ms + letters.end_ms[j];
-      if (wordStart === null) wordStart = absStart;
-      ch.dataset.start = absStart;
-      ch.dataset.end = absEnd;
-      ch.dataset.word = wIdx;
-      ch.dataset.gidx = flatLetters.length; // global cross-verse index for letter-browse mode
-      ch.textContent = useClusters ? wordClusters[j - run.start] : letters.char[j];
-      flatLetters.push({ verseIdx: idx, verse: v, startMs: absStart, endMs: absEnd, char: ch.textContent });
-      wordSpan.appendChild(ch);
+    const wordSpan = buildTimedWordSpan(v, wIdx, idx);
+    if (wordSpan) {
+      textEl.appendChild(wordSpan);
+      textEl.appendChild(document.createTextNode(' '));
     }
-    const extraWindows = extraWindowsByWord.get(wIdx);
-    if (extraWindows) {
-      const json = JSON.stringify(extraWindows);
-      wordSpan.dataset.extraWindows = json;
-      wordSpan.querySelectorAll('.letter').forEach(el => { el.dataset.extraWindows = json; });
-    }
-    wordSpan.dataset.startMs = wordStart;
-    wordSpan.addEventListener('click', (e) => {
-      e.stopPropagation();
-      audio.currentTime = wordStart / 1000;
-      audio.play();
-    });
-    const morph = MORPHOLOGY[v.ayah + ':' + wIdx];
-    if (morph) {
-      wordSpan.classList.add('has-morph');
-      wordSpan.tabIndex = 0;
-      wordSpan.addEventListener('mouseenter', () => showMorphTip(wordSpan, morph));
-      wordSpan.addEventListener('mouseleave', hideMorphTip);
-      wordSpan.addEventListener('focus', () => showMorphTip(wordSpan, morph));
-      wordSpan.addEventListener('blur', hideMorphTip);
-      wordSpan.addEventListener('click', () => showInspector(wordSpan, morph, v, wIdx));
-    }
-    textEl.appendChild(wordSpan);
-    textEl.appendChild(document.createTextNode(' '));
   }
 
   const pin = document.createElement('span');
@@ -1073,6 +1081,10 @@ function buildMushafPlainSpan(v, wIdx, wordText, wordStart) {
 function renderMushafPages() {
   mushafPagesEl.innerHTML = '';
   if (!VERSES.length) return;
+  // Letter/Word: same continuous page/line shell as Mushaf, but Uthmani
+  // letter spans so phoneme highlighting still works. Mushaf: QCF glyphs.
+  const withLetters = mode !== 'mushaf';
+  if (withLetters) flatLetters = [];
   const sMeta = SURAH_INDEX.find(x => x.num === currentSurah);
 
   const pageGroups = [];
@@ -1108,18 +1120,19 @@ function renderMushafPages() {
     }
 
     const flow = document.createElement('div');
-    flow.className = 'verse-text mushaf-text';
+    flow.className = 'verse-text mushaf-text' + (withLetters ? ' with-letters' : '');
     const isV2 = currentLayout === 'madani-v2';
-    if (isV2 && g.page) {
+    if (!withLetters && isV2 && g.page) {
       const family = tajweedOn ? 'QCFT' + g.page : 'QCFP' + g.page;
       flow.style.fontFamily = family + ', "Traditional Arabic", serif';
-    } else if (!isV2) {
+    } else {
       flow.style.fontFamily = "'UthmanicHafs', 'Traditional Arabic', 'Scheherazade New', serif";
     }
 
     let curLineNum = null;
     let lineDiv = null;
     for (const v of g.verses) {
+      const verseIdx = VERSES.indexOf(v);
       const wordLines = v.wordLines || [];
       const qusxWords = v.qusxWords || [];
       const wordTimeMs = new Map();
@@ -1133,15 +1146,18 @@ function renderMushafPages() {
           flow.appendChild(lineDiv);
           curLineNum = thisLine;
         }
-        const wordStart = wordTimeMs.has(wIdx) ? wordTimeMs.get(wIdx) : null;
-        const gSpan = isV2
-          ? buildMushafGlyphSpan(v, wIdx, wordStart)
-          : buildMushafPlainSpan(v, wIdx, qusxWords[wIdx - 1], wordStart);
-        if (gSpan) {
-          lineDiv.appendChild(gSpan);
+        if (withLetters) {
+          const wordSpan = buildTimedWordSpan(v, wIdx, verseIdx);
+          if (wordSpan) lineDiv.appendChild(wordSpan);
+        } else {
+          const wordStart = wordTimeMs.has(wIdx) ? wordTimeMs.get(wIdx) : null;
+          const gSpan = isV2
+            ? buildMushafGlyphSpan(v, wIdx, wordStart)
+            : buildMushafPlainSpan(v, wIdx, qusxWords[wIdx - 1], wordStart);
+          if (gSpan) lineDiv.appendChild(gSpan);
         }
       }
-      if (isV2) {
+      if (!withLetters && isV2) {
         // The font's own trailing ayah-number glyph — the real mushaf's
         // ornamental end-of-verse marker, non-interactive (no audio of its
         // own), inline right after the verse's last word like the real page.
@@ -1154,8 +1170,7 @@ function renderMushafPages() {
           lineDiv.appendChild(numSpan);
         }
       } else if (lineDiv) {
-        // No glyph font for this layout's ayah-number ornament — fall back
-        // to the same plain circled-digit marker classic mode uses.
+        // Letter/Word hybrid + non-glyph layouts: circled ayah pin.
         const pin = document.createElement('span');
         pin.className = 'ayah-pin';
         pin.textContent = toArabicDigits(v.ayah);
@@ -1222,36 +1237,11 @@ function makeRukuMark(n) {
 
 function renderAll() {
   versesEl.innerHTML = '';
+  versesEl.style.display = 'none';
   scrubberEl.innerHTML = '';
   flatLetters = [];
-  const sMeta = SURAH_INDEX.find(x => x.num === currentSurah);
-  if (sMeta && sMeta.bismillahPre && currentSurah !== 1) {
-    const b = document.createElement('div');
-    b.className = 'bismillah';
-    b.textContent = 'بِسْمِ اللَّهِ الرَّحْمَـٰنِ الرَّحِيمِ';
-    versesEl.appendChild(b);
-  }
-  let prevJuz = null, prevPage = null, prevRuku = null, prevManzil = null, prevHizb = null, prevRub = null;
-  VERSES.forEach((v, idx) => {
-    const labels = [];
-    if (v.page && v.page !== prevPage) labels.push({ text: 'PAGE ' + v.page, page: true });
-    if (v.manzil && v.manzil !== prevManzil) labels.push({ text: 'MANZIL ' + v.manzil, page: true });
-    if (v.juz && v.juz !== prevJuz) labels.push({ text: 'JUZ ' + v.juz, page: false });
-    if (v.hizb && v.hizb !== prevHizb) labels.push({ text: 'HIZB ' + v.hizb, page: false });
-    // Rub (240 total, ~every 26 ayahs) is the finest-grained milestone shown —
-    // rendered as a subtler "minor" break so it doesn't visually compete with
-    // the coarser juz/hizb/page/manzil axes at every occurrence.
-    if (v.rub && v.rub !== prevRub) labels.push({ text: 'RUB ' + v.rub, page: false, minor: true });
-    for (const l of labels) versesEl.appendChild(makeBreak(l.text, l.page, l.minor));
-    if (v.ruku && v.ruku !== prevRuku && !labels.length) versesEl.appendChild(makeRukuMark(v.ruku));
-    prevJuz = v.juz;
-    prevPage = v.page;
-    prevRuku = v.ruku;
-    prevManzil = v.manzil;
-    prevHizb = v.hizb;
-    prevRub = v.rub;
-    versesEl.appendChild(renderVerse(v, idx));
-  });
+  // Letter, Word, and Mushaf all share the continuous page shell.
+  mushafPagesEl.style.display = 'flex';
   renderMushafPages();
   VERSES.forEach((v, idx) => {
     const b = document.createElement('button');
@@ -1419,9 +1409,9 @@ async function loadSurah(num) {
     renderAll();
     audio.src = VERSES[0].audio;
     currentVerseIdx = 0;
-    document.querySelector('.verse[data-idx="0"]').classList.add('active');
     refreshScrubber(0);
     refreshInfoBar(0);
+    scrollToPlayback(0);
     if (browsing) exitBrowse();
     loadStatusEl.textContent = meta.ayahCount + ' verses loaded — ' + meta.nameArabic;
     refreshTraditionInfo(num, meta.ayahCount);
@@ -1456,11 +1446,22 @@ function jumpToVerse(idx, autoplay) {
   if (autoplay === undefined) autoplay = true;
   currentVerseIdx = idx;
   if (autoplay) audio.currentTime = VERSES[idx].source_offset_ms / 1000;
-  document.querySelectorAll('.verse').forEach((el, i) => el.classList.toggle('active', i === idx));
   clearHighlights();
   refreshScrubber(idx);
   refreshInfoBar(idx);
+  scrollToPlayback(idx);
   if (autoplay) audio.play();
+}
+
+function scrollToPlayback(idx) {
+  const v = VERSES[idx];
+  if (!v) return;
+  const target =
+    document.querySelector('.mushaf-pages .letter.lit') ||
+    document.querySelector('.mushaf-pages .word.active-word[data-ayah="' + v.ayah + '"]') ||
+    document.querySelector('.mushaf-pages .word[data-ayah="' + v.ayah + '"][data-word="1"]') ||
+    document.querySelector('.mushaf-pages .mushaf-glyph[data-ayah="' + v.ayah + '"]');
+  if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 // Word morphology tooltip (root/stem/lemma), from QUSX (github.com/dfordev1/usxv2)
@@ -1594,58 +1595,43 @@ function updateHighlight() {
   const idx = verseAtMs(ms);
   if (idx !== currentVerseIdx) {
     currentVerseIdx = idx;
-    document.querySelectorAll('.verse').forEach((el, i) => el.classList.toggle('active', i === idx));
     clearHighlights();
     refreshScrubber(idx);
     refreshInfoBar(idx);
-    const activeEl = document.querySelector('.verse.active');
-    if (activeEl) activeEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    scrollToPlayback(idx);
   }
 
-  const verseEl = document.querySelector('.verse[data-idx="' + currentVerseIdx + '"]');
-  if (!verseEl) return;
+  const v = VERSES[currentVerseIdx];
+  if (!v) return;
 
-  // Letter-level lighting runs in BOTH modes now — 'letter' mode shows it
-  // on its own, and 'word' mode layers it INSIDE the active word's
-  // highlighted box, so you see which word is playing AND exactly which
-  // letter within it, at the same time, instead of the two being mutually
-  // exclusive views.
-  verseEl.querySelectorAll('.letter').forEach(el => {
-    const s = +el.dataset.start, e = +el.dataset.end;
-    let active = ms >= s && ms < e;
-    if (!active && el.dataset.extraWindows) {
-      // a reciter repeat/retake — the same on-screen cell also lights
-      // during the take(s) after its first occurrence
-      active = JSON.parse(el.dataset.extraWindows).some(([a, b]) => ms >= a && ms < b);
-    }
-    el.classList.toggle('lit', active);
-  });
+  // Letter-level lighting for Letter + Word hybrid page layout.
+  if (mode === 'letter' || mode === 'word') {
+    document.querySelectorAll('.mushaf-pages .word[data-ayah="' + v.ayah + '"] .letter').forEach(el => {
+      const s = +el.dataset.start, e = +el.dataset.end;
+      let active = ms >= s && ms < e;
+      if (!active && el.dataset.extraWindows) {
+        active = JSON.parse(el.dataset.extraWindows).some(([a, b]) => ms >= a && ms < b);
+      }
+      el.classList.toggle('lit', active);
+    });
+  }
 
   if (mode === 'letter') {
-    verseEl.querySelectorAll('.word').forEach(el => el.classList.remove('active-word'));
-  } else {
-    const v = VERSES[currentVerseIdx];
-    let activeWord = null;
-    for (const [wIdx, s, e] of v.words) {
-      if (ms - v.source_offset_ms >= s && ms - v.source_offset_ms < e) { activeWord = wIdx; break; }
-    }
-    verseEl.querySelectorAll('.word').forEach(el => {
-      el.classList.toggle('active-word', activeWord !== null && +el.dataset.word === activeWord);
-    });
-
-    // Mushaf mode has no per-verse container to scope by (it's one
-    // continuous flowing page) — select this ayah's glyphs directly by
-    // data-ayah instead, since a bare word position (data-word) repeats
-    // across every ayah on the page.
-    if (mode === 'mushaf') {
-      document.querySelectorAll('.mushaf-glyph[data-ayah="' + v.ayah + '"]').forEach(el => {
-        el.classList.toggle('active-word', activeWord !== null && +el.dataset.word === activeWord);
-      });
-      document.querySelectorAll('.mushaf-glyph.active-word').forEach(el => {
-        if (el.dataset.ayah !== String(v.ayah)) el.classList.remove('active-word');
-      });
-    }
+    document.querySelectorAll('.mushaf-pages .word.active-word').forEach(el => el.classList.remove('active-word'));
+    return;
   }
+
+  // Word + Mushaf: highlight the active word glyph/span on the page.
+  let activeWord = null;
+  for (const [wIdx, s, e] of v.words) {
+    if (ms - v.source_offset_ms >= s && ms - v.source_offset_ms < e) { activeWord = wIdx; break; }
+  }
+  document.querySelectorAll('.mushaf-pages .word[data-ayah="' + v.ayah + '"]').forEach(el => {
+    el.classList.toggle('active-word', activeWord !== null && +el.dataset.word === activeWord);
+  });
+  document.querySelectorAll('.mushaf-pages .word.active-word').forEach(el => {
+    if (el.dataset.ayah !== String(v.ayah)) el.classList.remove('active-word');
+  });
 }
 
 audio.addEventListener('timeupdate', () => {
@@ -1687,18 +1673,20 @@ tajweedBtn.addEventListener('click', async () => {
   renderMushafPages();
 });
 function setMode(m) {
+  const prev = mode;
   mode = m;
   document.getElementById('modeLetter').classList.toggle('on', m === 'letter');
   document.getElementById('modeWord').classList.toggle('on', m === 'word');
   document.getElementById('modeMushaf').classList.toggle('on', m === 'mushaf');
-  // Mushaf mode has no letter-level timing of its own (one glyph = one
-  // whole word) — it reuses word-level highlighting, same as 'word' mode.
-  // It's also a completely separate continuous-flow container (real
-  // mushaf pages have no per-verse boxes), not a CSS skin over the
-  // classic per-verse cards — so swap the whole container, not a class.
-  versesEl.style.display = m === 'mushaf' ? 'none' : 'flex';
-  mushafPagesEl.style.display = m === 'mushaf' ? 'flex' : 'none';
+  // All three modes use the continuous mushaf page shell. Letter/Word render
+  // Uthmani letter spans; Mushaf renders QCF glyphs. Rebuild when crossing
+  // that boundary (letter content vs glyph content).
+  versesEl.style.display = 'none';
+  mushafPagesEl.style.display = 'flex';
   tajweedBtn.disabled = m !== 'mushaf' || currentLayout !== 'madani-v2';
+  if ((prev === 'mushaf') !== (m === 'mushaf') && VERSES.length) {
+    renderMushafPages();
+  }
   clearHighlights();
 }
 
