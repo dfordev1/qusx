@@ -176,6 +176,7 @@ html = """<!DOCTYPE html>
   .qusx-break.minor .lbl { font-size: 9px; }
   .ayah-pin {
     display: inline-flex;
+    flex: 0 0 auto;
     align-items: center;
     justify-content: center;
     min-width: 1.6em;
@@ -237,11 +238,10 @@ html = """<!DOCTYPE html>
      ONE CONTINUOUS FLOWING PAGE, not per-verse cards: a real mushaf has no
      visual break between verses, so words from consecutive ayahs share
      the same line right up to QUSX's actual line-break positions.
-     NOT justified edge-to-edge: real mushaf pages get that by stretching
-     the letters themselves (kashida), which needs a dedicated shaping
-     engine we don't have. Plain CSS `justify` can only stretch by adding
-     blank space between words, which on a short 4-6-word line blows huge
-     ugly gaps — worse than just letting the line sit at its natural width. */
+     Full lines are edge-to-edge via flex space-between so the visual left
+     of the page aligns like a printed mushaf. True kashida shaping still
+     isn't available; this only redistributes inter-word space. Single-token
+     lines keep natural width (`.is-short`). */
   .mushaf-pages {
     display: none;
     width: 100%;
@@ -273,17 +273,34 @@ html = """<!DOCTYPE html>
     letter-spacing: 0;
     text-align: start;
   }
-  .mushaf-line { display: block; }
+  .mushaf-line {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: baseline;
+    justify-content: space-between;
+    direction: rtl;
+    width: 100%;
+  }
+  .mushaf-line.is-short {
+    justify-content: flex-start;
+    gap: 0.35em;
+  }
   .mushaf-glyph {
-    display: inline;
+    display: inline-block;
+    flex: 0 0 auto;
     border-radius: 6px;
     padding: 2px 4px;
-    margin: 0 1px;
+    margin: 0;
     transition: background 0.15s;
     cursor: pointer;
   }
   .mushaf-glyph.active-word { background: var(--accent-soft); }
-  .mushaf-num-glyph { display: inline; color: var(--accent); margin: 0 2px; }
+  .mushaf-num-glyph {
+    display: inline-block;
+    flex: 0 0 auto;
+    color: var(--accent);
+    margin: 0;
+  }
   .letter { transition: color 0.08s, text-shadow 0.08s; }
   .letter.lit { color: var(--accent); text-shadow: 0 0 14px var(--accent-soft); }
   .word {
@@ -1122,7 +1139,6 @@ function renderMushafPages() {
           : buildMushafPlainSpan(v, wIdx, qusxWords[wIdx - 1], wordStart);
         if (gSpan) {
           lineDiv.appendChild(gSpan);
-          lineDiv.appendChild(document.createTextNode(' '));
         }
       }
       if (isV2) {
@@ -1155,7 +1171,24 @@ function renderMushafPages() {
     pageDiv.appendChild(flow);
     mushafPagesEl.appendChild(pageDiv);
   });
+  // Defer until fonts/glyphs have laid out so short-line detection is real.
+  requestAnimationFrame(() => requestAnimationFrame(markShortMushafLines));
 }
+
+function markShortMushafLines() {
+  // Only leave natural width for single-token lines (e.g. a lone ayah pin).
+  // Every real mushaf line with 2+ glyphs is edge-to-edge; CSS space-between
+  // is the closest we can get without kashida shaping.
+  mushafPagesEl.querySelectorAll('.mushaf-line').forEach(line => {
+    line.classList.toggle('is-short', line.children.length < 2);
+  });
+}
+
+let mushafJustifyTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(mushafJustifyTimer);
+  mushafJustifyTimer = setTimeout(markShortMushafLines, 120);
+});
 
 const scrubberEl = document.getElementById('scrubber');
 
