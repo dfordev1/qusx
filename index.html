@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Qur'an Follow-Along — Letter Highlighting</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Scheherazade+New:wght@400;700&display=swap" rel="stylesheet">
 <script>
   // Applied before first paint so there's no dark-then-light flash: an
   // explicit prior choice (localStorage) wins, otherwise fall back to the
@@ -45,13 +48,12 @@
     --shadow: 0 10px 30px rgba(36,31,20,0.10);
     --bg-glow: rgba(184,134,42,0.08);
   }
-  /* The real Uthmani Quranic script (QPC "Uthmanic Hafs"), NOT the QCF
-     glyph-per-word mushaf font used in Mushaf mode — this is a normal
-     Unicode font (one file, full cmap + contextual joining), so it's the
-     right choice for Letter/Word modes where text still needs to be
-     split into individual per-letter spans for highlighting. The QCF
-     glyph fonts can't do that: each of their "characters" IS an entire
-     precomposed word, with no individual letters to select. */
+  /* UthmanicHafs (QPC) is kept for bismillah / morph tips, but Letter/Word
+     mode prefers Scheherazade New: UthmanicHafs Ver18 paints U+06DF/U+06E0
+     (small high rounded zero on silent alif, etc.) as a wide spacing
+     dotted-circle tofu instead of a combining sifr above the base letter.
+     Scheherazade shapes those marks correctly. QCF mushaf glyph fonts stay
+     Mushaf-mode only — each "character" is a whole precomposed word. */
   @font-face {
     font-family: 'UthmanicHafs';
     src: url('https://verses.quran.foundation/fonts/quran/hafs/uthmanic_hafs/UthmanicHafs1Ver18.woff2') format('woff2');
@@ -195,7 +197,7 @@
     direction: ltr;
   }
   .verse-text {
-    font-family: 'UthmanicHafs', "Traditional Arabic", "Scheherazade New", serif;
+    font-family: 'Scheherazade New', "Traditional Arabic", 'UthmanicHafs', serif;
     font-size: 34px;
     line-height: 2.3;
     letter-spacing: 0.01em;
@@ -253,10 +255,10 @@
     justify-content: flex-start;
     gap: 0.35em;
   }
-  /* Letter/Word hybrid: same page/line shell as Mushaf, but real Uthmani
-     letters so phoneme highlighting still works. */
+  /* Letter/Word hybrid: same page/line shell as Mushaf, but real Unicode
+     letters (Scheherazade) so phoneme highlighting + Quranic marks work. */
   .mushaf-text.with-letters {
-    font-family: 'UthmanicHafs', "Traditional Arabic", "Scheherazade New", serif;
+    font-family: 'Scheherazade New', "Traditional Arabic", 'UthmanicHafs', serif;
   }
   .mushaf-line .word {
     display: inline-block;
@@ -863,6 +865,13 @@ function isMarkOnly(text) {
   }
   return true;
 }
+// Silent-letter zeros (U+06DF/U+06E0) and empty-centre stop (U+06EB): in
+// Letter/Word spans these read as "unknown circle" glyphs even when the
+// font shapes them. Mushaf/QCF word glyphs still show the orthographic mark.
+const HIDDEN_ORTHO_MARKS_RE = /[۟۠۫]/g;
+function displayLetterText(text) {
+  return text.replace(HIDDEN_ORTHO_MARKS_RE, '');
+}
 function buildClusters(text) {
   const clusters = [];
   for (const ch of text) {
@@ -914,27 +923,41 @@ function buildTimedWordSpan(v, wIdx, verseIdx) {
   if (!run) return null;
 
   const qusxWords = v.qusxWords || [];
+  // Always paint ONE visual word from QUSX text. Letter timestamps sometimes
+  // contain the same word twice in one contiguous word_idx run when the
+  // reciter repeats it — using letters.char naively then shows قالقال etc.
   const wordClusters = buildClusters(qusxWords[wIdx - 1] || '');
-  const useClusters = wordClusters.length === (run.end - run.start);
+  const nClusters = wordClusters.length;
+  if (!nClusters) return null;
+
+  const runLen = run.end - run.start;
+  const extras = [...(extraWindowsByWord.get(wIdx) || [])];
+  // Contiguous re-recitation: N full copies of the word under one word_idx.
+  let passLen = runLen;
+  if (runLen > nClusters && runLen % nClusters === 0) {
+    const passes = runLen / nClusters;
+    passLen = nClusters;
+    for (let p = 1; p < passes; p++) {
+      const a = v.source_offset_ms + letters.start_ms[run.start + p * passLen];
+      const b = v.source_offset_ms + letters.end_ms[run.start + p * passLen + passLen - 1];
+      extras.push([a, b]);
+    }
+  }
 
   const wordSpan = document.createElement('span');
   wordSpan.className = 'word';
   wordSpan.dataset.word = wIdx;
   wordSpan.dataset.ayah = v.ayah;
   let wordStart = null;
-  for (let j = run.start; j < run.end; j++) {
-    const absStart = v.source_offset_ms + letters.start_ms[j];
-    const absEnd = v.source_offset_ms + letters.end_ms[j];
-    if (wordStart === null) wordStart = absStart;
-    const text = useClusters ? wordClusters[j - run.start] : letters.char[j];
 
-    // Timing often isolates a combining mark (۟ ٰ etc.) as its own step.
-    // A mark alone paints as ◌ + mark — attach it to the previous letter
-    // for display, and keep a zero-width timing span that lights that base.
-    if (isMarkOnly(text) && wordSpan.lastElementChild) {
-      const prev = wordSpan.lastElementChild;
-      prev.textContent += text;
-      if (absEnd > +prev.dataset.end) prev.dataset.end = String(absEnd);
+  const appendLetter = (text, absStart, absEnd) => {
+    if (wordStart === null) wordStart = absStart;
+    const prevVisible = [...wordSpan.children].reverse().find(el => !el.classList.contains('mark-only'));
+    // Timing often isolates a combining mark as its own step — attach to
+    // previous visible letter for display, keep a zero-width timing ghost.
+    if (isMarkOnly(text) && prevVisible) {
+      prevVisible.textContent = displayLetterText(prevVisible.textContent + text);
+      if (absEnd > +prevVisible.dataset.end) prevVisible.dataset.end = String(absEnd);
       const ghost = document.createElement('span');
       ghost.className = 'letter mark-only';
       ghost.dataset.start = absStart;
@@ -946,9 +969,8 @@ function buildTimedWordSpan(v, wIdx, verseIdx) {
       ghost.textContent = '';
       flatLetters.push({ verseIdx, verse: v, startMs: absStart, endMs: absEnd, char: text });
       wordSpan.appendChild(ghost);
-      continue;
+      return;
     }
-
     const ch = document.createElement('span');
     ch.className = 'letter';
     ch.dataset.start = absStart;
@@ -956,15 +978,39 @@ function buildTimedWordSpan(v, wIdx, verseIdx) {
     ch.dataset.word = wIdx;
     ch.dataset.ayah = v.ayah;
     ch.dataset.gidx = flatLetters.length;
-    // Orphan mark with no base yet — use tatweel so shaping has a carrier
-    // instead of inventing a dotted circle.
-    ch.textContent = isMarkOnly(text) ? ('ـ' + text) : text;
+    const raw = isMarkOnly(text) ? ('ـ' + text) : text;
+    ch.textContent = displayLetterText(raw);
+    if (!ch.textContent) ch.classList.add('mark-only');
     flatLetters.push({ verseIdx, verse: v, startMs: absStart, endMs: absEnd, char: text });
     wordSpan.appendChild(ch);
+  };
+
+  if (nClusters === passLen) {
+    for (let c = 0; c < nClusters; c++) {
+      const j = run.start + c;
+      appendLetter(
+        wordClusters[c],
+        v.source_offset_ms + letters.start_ms[j],
+        v.source_offset_ms + letters.end_ms[j]
+      );
+    }
+  } else {
+    // Timed segmentation differs from QUSX clusters (e.g. dagger-alif alone).
+    // Still show clusters once; stretch timing across the first pass.
+    for (let c = 0; c < nClusters; c++) {
+      const j0 = run.start + Math.floor(c * passLen / nClusters);
+      const j1 = run.start + Math.max(j0, Math.floor((c + 1) * passLen / nClusters) - 1);
+      const jEnd = Math.min(j1, run.start + passLen - 1);
+      appendLetter(
+        wordClusters[c],
+        v.source_offset_ms + letters.start_ms[j0],
+        v.source_offset_ms + letters.end_ms[jEnd]
+      );
+    }
   }
-  const extraWindows = extraWindowsByWord.get(wIdx);
-  if (extraWindows) {
-    const json = JSON.stringify(extraWindows);
+
+  if (extras.length) {
+    const json = JSON.stringify(extras);
     wordSpan.dataset.extraWindows = json;
     wordSpan.querySelectorAll('.letter').forEach(el => { el.dataset.extraWindows = json; });
   }
@@ -1138,6 +1184,8 @@ function renderMushafPages() {
     if (!withLetters && isV2 && g.page) {
       const family = tajweedOn ? 'QCFT' + g.page : 'QCFP' + g.page;
       flow.style.fontFamily = family + ', "Traditional Arabic", serif';
+    } else if (withLetters) {
+      flow.style.fontFamily = "'Scheherazade New', 'Traditional Arabic', 'UthmanicHafs', serif";
     } else {
       flow.style.fontFamily = "'UthmanicHafs', 'Traditional Arabic', 'Scheherazade New', serif";
     }
