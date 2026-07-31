@@ -297,6 +297,18 @@ html = """<!DOCTYPE html>
     max-width: 100%;
   }
   .mushaf-line .word .letter { display: inline; }
+  .letter.mark-only {
+    display: inline-block;
+    width: 0;
+    height: 0;
+    overflow: hidden;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    font-size: 0;
+    line-height: 0;
+    vertical-align: baseline;
+  }
   .mushaf-glyph {
     display: inline-block;
     flex: 0 0 auto;
@@ -860,13 +872,14 @@ function fmtTime(ms) {
 }
 
 // Split full-tashkeel Uthmani text into display "clusters": a base letter plus
-// any trailing combining marks (harakat, shadda, sukun, tanwin, tatweel).
-// Superscript alef (U+0670) is NOT merged in — it carries its own audible
-// madd duration and gets its own timing entry, matching the letter_timestamps
-// array from the dataset 1:1.
+// any trailing combining marks (harakat, shadda, sukun, tanwin, tatweel,
+// superscript alef). Timing may still treat some marks as their own step —
+// those are attached back onto the previous letter at render time so the
+// browser never paints the dotted-circle placeholder (◌).
 const COMBINING_RANGES = [
   [0x064B, 0x0652], // fathatan..sukun
   [0x0653, 0x065F], // maddah/hamza-above-below variants, small marks
+  [0x0670, 0x0670], // superscript alef (madd) — combining for display
   [0x06D6, 0x06ED],  // quranic annotation signs
   [0x0610, 0x061A],  // honorific/quranic signs
   [0x0640, 0x0640],  // tatweel
@@ -874,6 +887,13 @@ const COMBINING_RANGES = [
 function isCombining(cp) {
   for (const [a, b] of COMBINING_RANGES) if (cp >= a && cp <= b) return true;
   return false;
+}
+function isMarkOnly(text) {
+  if (!text) return false;
+  for (const ch of text) {
+    if (!isCombining(ch.codePointAt(0))) return false;
+  }
+  return true;
 }
 function buildClusters(text) {
   const clusters = [];
@@ -935,18 +955,43 @@ function buildTimedWordSpan(v, wIdx, verseIdx) {
   wordSpan.dataset.ayah = v.ayah;
   let wordStart = null;
   for (let j = run.start; j < run.end; j++) {
-    const ch = document.createElement('span');
-    ch.className = 'letter';
     const absStart = v.source_offset_ms + letters.start_ms[j];
     const absEnd = v.source_offset_ms + letters.end_ms[j];
     if (wordStart === null) wordStart = absStart;
+    const text = useClusters ? wordClusters[j - run.start] : letters.char[j];
+
+    // Timing often isolates a combining mark (۟ ٰ etc.) as its own step.
+    // A mark alone paints as ◌ + mark — attach it to the previous letter
+    // for display, and keep a zero-width timing span that lights that base.
+    if (isMarkOnly(text) && wordSpan.lastElementChild) {
+      const prev = wordSpan.lastElementChild;
+      prev.textContent += text;
+      if (absEnd > +prev.dataset.end) prev.dataset.end = String(absEnd);
+      const ghost = document.createElement('span');
+      ghost.className = 'letter mark-only';
+      ghost.dataset.start = absStart;
+      ghost.dataset.end = absEnd;
+      ghost.dataset.word = wIdx;
+      ghost.dataset.ayah = v.ayah;
+      ghost.dataset.gidx = flatLetters.length;
+      ghost.dataset.attachPrev = '1';
+      ghost.textContent = '';
+      flatLetters.push({ verseIdx, verse: v, startMs: absStart, endMs: absEnd, char: text });
+      wordSpan.appendChild(ghost);
+      continue;
+    }
+
+    const ch = document.createElement('span');
+    ch.className = 'letter';
     ch.dataset.start = absStart;
     ch.dataset.end = absEnd;
     ch.dataset.word = wIdx;
     ch.dataset.ayah = v.ayah;
     ch.dataset.gidx = flatLetters.length;
-    ch.textContent = useClusters ? wordClusters[j - run.start] : letters.char[j];
-    flatLetters.push({ verseIdx, verse: v, startMs: absStart, endMs: absEnd, char: ch.textContent });
+    // Orphan mark with no base yet — use tatweel so shaping has a carrier
+    // instead of inventing a dotted circle.
+    ch.textContent = isMarkOnly(text) ? ('\u0640' + text) : text;
+    flatLetters.push({ verseIdx, verse: v, startMs: absStart, endMs: absEnd, char: text });
     wordSpan.appendChild(ch);
   }
   const extraWindows = extraWindowsByWord.get(wIdx);
@@ -1613,6 +1658,10 @@ function updateHighlight() {
         active = JSON.parse(el.dataset.extraWindows).some(([a, b]) => ms >= a && ms < b);
       }
       el.classList.toggle('lit', active);
+      // Mark-only ghosts inherit glow onto the base letter they attach to.
+      if (el.dataset.attachPrev && el.previousElementSibling) {
+        if (active) el.previousElementSibling.classList.add('lit');
+      }
     });
   }
 
