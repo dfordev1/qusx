@@ -26,12 +26,11 @@ plus open audio and mushaf glyph datasets.
 - Compact chrome (surah/juz + theme; reciter/layout/font/pages under ⋯)
 - Word-tap-to-seek; juz/hizb/rub/manzil/page/ruku/sajda milestones from QUSX
 
-### Optional: Al-Hadr local alignments
+### Optional: Al-Hadr alignments
 
-When served with a local `local_alhadr/` pack (manifest + juz `.ogg` audio), the app
-can use **Al-Hadr** word alignments offline, with Archive.org as a remote fallback.
-That pack is **not** shipped in this repo (too large); keep it beside the app when
-developing locally.
+`local_alhadr/manifest.json` ships with the repo (timings only). Audio streams from
+Internet Archive via `manifest.audioBase`. For fully offline use, place juz `.ogg`
+files under `local_alhadr/audio/` and set `"preferLocalAudio": true` in the manifest.
 
 ## Data sources
 

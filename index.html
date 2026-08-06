@@ -1256,9 +1256,10 @@ function applyLocalAlhadrAvailability() {
   const localOpt = reciterSelect && reciterSelect.querySelector('option[value="' + LOCAL_RECITER_ID + '"]');
   if (localOpt) {
     localOpt.disabled = !LOCAL_ALHADR_AVAILABLE;
-    if (!LOCAL_ALHADR_AVAILABLE) {
-      localOpt.textContent = 'Al-Hadr (local pack not available)';
-    }
+    localOpt.hidden = false;
+    localOpt.textContent = LOCAL_ALHADR_AVAILABLE
+      ? 'Al-Hadr (alignments)'
+      : 'Al-Hadr (pack missing — local only)';
   }
   if (!LOCAL_ALHADR_AVAILABLE && isLocalReciter()) {
     RECITER_CONFIG = firstOnlineReciter();
@@ -1275,15 +1276,18 @@ function applyLocalAlhadrAvailability() {
   }
 }
 
-// Optional manifest.audioBase (Internet Archive) is a fallback when a local
-// juz file is missing; prefer relative local_alhadr/audio paths when present.
+// Optional manifest.audioBase (Internet Archive) rewrites relative juz paths
+// to absolute URLs so GitHub Pages can run Al-Hadr without shipping audio.
+// Set preferLocalAudio: true in the manifest to keep relative paths for offline.
 function normalizeLocalManifest(m) {
   const base = (m.audioBase || '').replace(/\/$/, '');
   m._remoteAudioBase = base || '';
+  const preferLocal = m.preferLocalAudio === true;
+  if (!base || preferLocal) return m;
   const fix = (p) => {
     if (!p || /^https?:\/\//i.test(p)) return p;
-    // Keep relative local paths so file://-adjacent HTTP serves work offline.
-    return p;
+    const name = p.split('/').pop();
+    return base + '/' + name;
   };
   for (const t of (m.tracks || [])) t.audio = fix(t.audio);
   for (const sn of Object.keys(m.surahs || {})) {
