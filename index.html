@@ -1208,19 +1208,71 @@ async function ensureTajweedFont(page) {
 }
 
 const RECITERS = [["local_alhadr", "Al-Hadr (local alignments)"], ["abdul_hamid_ghraio_2025_yt", "Abdul Hamid Ghraio (2025)"], ["abdul_hamid_ghraio_2026_yt", "Abdul Hamid Ghraio (2026)"], ["abdulbasit_abdulsamad_mujawwad_tarteel", "Abdul Basit Abdul Samad (Mujawwad)"], ["abdulbasit_abdulsamad_tarteel", "Abdul Basit Abdul Samad"], ["abdullah_al_buaijan_2025_yt", "Abdullah Al-Buaijan"], ["abdullah_al_qarafi_mp3quran", "Abdullah Al-Qarafi"], ["abdulwadood_haneef_mp3quran", "Abdulwadood Haneef"], ["abdur_rashid_sufi_qdc", "Abdur-Rashid Sufi"], ["abu_bakr_al_shatri_tarteel", "Abu Bakr Al-Shatri"], ["ahmed_amer_tvquran", "Ahmed Amer"], ["ahmed_issa_al_maasaraawi_mp3quran", "Ahmed Issa Al-Maasaraawi"], ["ahmed_kaseb_way2quran", "Ahmed Kaseb"], ["ahmed_saud_mp3quran", "Ahmed Saud"], ["ahmed_shaheen_mp3quran", "Ahmed Shaheen"], ["ali_al_huthaifi_mp3quran", "Ali Al-Huthaifi"], ["ayman_swed_muallim_tvquran", "Ayman Swed (Muallim)"], ["ibrahim_al_akhdar_drive", "Ibrahim Al-Akhdar"], ["imad_zuhair_hafez_mp3quran", "Imad Zuhair Hafez"], ["islam_sobhi_mp3quran", "Islam Sobhi"], ["khalid_al_mohana_drive", "Khalid Al-Mohana"], ["khalifa_al_tunaiji_tarteel", "Khalifa Al-Tunaiji"], ["maher_al_muaiqly_qdc", "Maher Al-Muaiqly"], ["mahmoud_abdul_hakam_mp3quran", "Mahmoud Abdul Hakam"], ["mahmoud_ali_al_banna_qdc", "Mahmoud Ali Al-Banna"], ["mahmoud_khalil_al_husary_mp3quran", "Mahmoud Khalil Al-Husary"], ["mahmoud_khalil_al_husary_mujawwad_tarteel", "Mahmoud Khalil Al-Husary (Mujawwad)"], ["mishary_rashid_al_afasy_mp3quran", "Mishary Rashid Al-Afasy"], ["mohammed_alghazali_archive", "Mohammed Al-Ghazali"], ["mohammed_ayyub_drive", "Mohammed Ayyub"], ["mohammed_burhaji_yt", "Mohammed Burhaji"], ["mohammed_siddiq_al_minshawi_1967_drive", "Mohammed Siddiq Al-Minshawi (1967)"], ["mohammed_siddiq_al_minshawi_mp3quran", "Mohammed Siddiq Al-Minshawi"], ["mushafs", "Mushafs"], ["mustafa_ismail_mp3quran", "Mustafa Ismail"], ["nasser_al_qatami_mp3quran", "Nasser Al-Qatami"], ["saud_al_shuraim_mp3quran", "Saud Al-Shuraim"]]; // first entry may be local_alhadr; rest are QUA HF configs
-let RECITER_CONFIG = RECITERS[0][0]; // default: local Al-Hadr alignments when present
+let RECITER_CONFIG = RECITERS[0][0]; // may fall back after probing local_alhadr/
 const LOCAL_RECITER_ID = 'local_alhadr';
 let LOCAL_MANIFEST = null; // loaded on demand from ./local_alhadr/manifest.json
+let LOCAL_ALHADR_AVAILABLE = null; // null = unknown, true/false after probe
 let currentAudioKey = null; // which verse.audio is currently loaded into <audio>
 
 function isLocalReciter() { return RECITER_CONFIG === LOCAL_RECITER_ID; }
 
+function firstOnlineReciter() {
+  const hit = RECITERS.find(r => r[0] !== LOCAL_RECITER_ID);
+  return hit ? hit[0] : RECITERS[0][0];
+}
+
 async function ensureLocalManifest() {
   if (LOCAL_MANIFEST) return LOCAL_MANIFEST;
   const res = await fetch('local_alhadr/manifest.json');
-  if (!res.ok) throw new Error('local Al-Hadr manifest missing (' + res.status + ') — serve the app folder over HTTP');
+  if (!res.ok) {
+    LOCAL_ALHADR_AVAILABLE = false;
+    throw new Error('local Al-Hadr pack not found (' + res.status + '). Use an online reciter, or serve this folder over HTTP with local_alhadr/ present.');
+  }
   LOCAL_MANIFEST = normalizeLocalManifest(await res.json());
+  LOCAL_ALHADR_AVAILABLE = true;
   return LOCAL_MANIFEST;
+}
+
+/** Soft probe — never throws. Used at boot so GitHub Pages can skip Al-Hadr. */
+async function probeLocalAlhadr() {
+  if (LOCAL_ALHADR_AVAILABLE === true && LOCAL_MANIFEST) return true;
+  if (LOCAL_ALHADR_AVAILABLE === false) return false;
+  try {
+    const res = await fetch('local_alhadr/manifest.json', { method: 'GET' });
+    if (!res.ok) {
+      LOCAL_ALHADR_AVAILABLE = false;
+      return false;
+    }
+    LOCAL_MANIFEST = normalizeLocalManifest(await res.json());
+    LOCAL_ALHADR_AVAILABLE = true;
+    return true;
+  } catch (_) {
+    LOCAL_ALHADR_AVAILABLE = false;
+    return false;
+  }
+}
+
+function applyLocalAlhadrAvailability() {
+  const localOpt = reciterSelect && reciterSelect.querySelector('option[value="' + LOCAL_RECITER_ID + '"]');
+  if (localOpt) {
+    localOpt.disabled = !LOCAL_ALHADR_AVAILABLE;
+    if (!LOCAL_ALHADR_AVAILABLE) {
+      localOpt.textContent = 'Al-Hadr (local pack not available)';
+    }
+  }
+  if (!LOCAL_ALHADR_AVAILABLE && isLocalReciter()) {
+    RECITER_CONFIG = firstOnlineReciter();
+    if (reciterSelect) reciterSelect.value = RECITER_CONFIG;
+    refreshReciterInfo();
+    browseMode = 'surah';
+    if (browseModeSelect) browseModeSelect.value = 'surah';
+    if (surahSelect) surahSelect.style.display = '';
+    if (juzSelect) juzSelect.style.display = 'none';
+  }
+  if (browseModeSelect) {
+    const juzOpt = browseModeSelect.querySelector('option[value="juz"]');
+    if (juzOpt) juzOpt.disabled = !isLocalReciter();
+  }
 }
 
 // Optional manifest.audioBase (Internet Archive) is a fallback when a local
@@ -1830,8 +1882,12 @@ reciterSelect.addEventListener('change', async () => {
       if (browseMode === 'juz') await loadJuz(currentJuz || LOCAL_MANIFEST.tracks[0].juz);
       else await loadSurah(want);
     } catch (err) {
-      loadStatusEl.textContent = err.message;
+      LOCAL_ALHADR_AVAILABLE = false;
+      applyLocalAlhadrAvailability();
+      loadStatusEl.textContent = err.message + ' — switched to an online reciter.';
       loadStatusEl.classList.add('error');
+      refreshSurahAvailability();
+      await loadSurah(currentSurah || 1);
     }
   } else {
     refreshSurahAvailability();
@@ -3626,22 +3682,24 @@ document.addEventListener('keydown', (e) => {
 });
 [playBtn, seek].forEach(el => el.addEventListener('click', () => { if (browsing) exitBrowse(); }));
 
-// init — resume last read when possible; else start at Al-Fatiha
+// init — probe optional Al-Hadr pack, resume last read when possible
 (async () => {
   const bootHint = document.getElementById('bootHint');
   try {
-    if (isLocalReciter()) {
-      try {
-        await ensureLocalManifest();
-        refreshSurahAvailability();
-      } catch (err) {
-        loadStatusEl.textContent = err.message;
-        loadStatusEl.classList.add('error');
-        if (bootHint) bootHint.textContent = 'Failed to load timings — ' + err.message;
-        return;
-      }
-    }
     const saved = readResumeState();
+    if (saved && saved.reciter && RECITERS.some(r => r[0] === saved.reciter)) {
+      RECITER_CONFIG = saved.reciter;
+      if (reciterSelect) reciterSelect.value = RECITER_CONFIG;
+      refreshReciterInfo();
+    }
+    await probeLocalAlhadr();
+    applyLocalAlhadrAvailability();
+    if (LOCAL_ALHADR_AVAILABLE && isLocalReciter()) {
+      refreshSurahAvailability();
+      refreshJuzSelect();
+    } else {
+      refreshSurahAvailability();
+    }
     if (saved && saved.layout && LAYOUTS.some(([k]) => k === saved.layout)) {
       currentLayout = saved.layout;
       if (layoutSelect) layoutSelect.value = currentLayout;
@@ -3654,7 +3712,7 @@ document.addEventListener('keydown', (e) => {
         resumeSurah: saved.surah,
         resumeAyah: saved.ayah || 1,
       };
-      const wantJuz = saved.browseMode === 'juz' && saved.juz != null && isLocalReciter();
+      const wantJuz = saved.browseMode === 'juz' && saved.juz != null && isLocalReciter() && LOCAL_ALHADR_AVAILABLE;
       if (wantJuz) await loadJuz(+saved.juz, resumeOpts);
       else await loadSurah(+saved.surah, resumeOpts);
       if (loadStatusEl && !loadStatusEl.classList.contains('error')) {
@@ -3663,6 +3721,12 @@ document.addEventListener('keydown', (e) => {
     } else {
       await loadSurah(1);
     }
+  } catch (err) {
+    if (loadStatusEl) {
+      loadStatusEl.textContent = err.message || String(err);
+      loadStatusEl.classList.add('error');
+    }
+    if (bootHint) bootHint.textContent = 'Failed to load — ' + (err.message || err);
   } finally {
     if (bootHint) bootHint.classList.add('done');
   }
