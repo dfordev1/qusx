@@ -1296,11 +1296,49 @@ function normalizeLocalManifest(m) {
   return m;
 }
 
-function remoteAudioFallback(localPath) {
+// Archive.org ships ogg for juz 1–21 and 23, but juz 22 and 25–30 are opus-only.
+const AUDIO_EXT_FALLBACKS = ['.ogg', '.opus', '.mp3'];
+
+function audioBasename(path) {
+  if (!path) return null;
+  const name = path.split('/').pop();
+  return name || null;
+}
+
+function audioUrlWithExt(path, ext) {
+  const name = audioBasename(path);
+  if (!name) return null;
+  const stem = name.replace(/\.(ogg|opus|mp3)$/i, '');
+  const newName = stem + ext;
+  if (/^https?:\/\//i.test(path)) {
+    const parts = path.split('/');
+    parts[parts.length - 1] = newName;
+    return parts.join('/');
+  }
   const base = LOCAL_MANIFEST && LOCAL_MANIFEST._remoteAudioBase;
-  if (!base || !localPath || /^https?:\/\//i.test(localPath)) return null;
-  const name = localPath.split('/').pop();
-  return name ? (base + '/' + name) : null;
+  if (base) return base + '/' + newName;
+  const parts = path.split('/');
+  parts[parts.length - 1] = newName;
+  return parts.join('/');
+}
+
+function nextAudioFallback(failedUrl, triedSet) {
+  const name = audioBasename(failedUrl);
+  if (!name) return null;
+  const currentExt = (name.match(/\.(ogg|opus|mp3)$/i) || [])[0] || '.ogg';
+  if (!/^https?:\/\//i.test(failedUrl)) {
+    const base = LOCAL_MANIFEST && LOCAL_MANIFEST._remoteAudioBase;
+    if (base) {
+      const remote = base + '/' + name;
+      if (!triedSet.has(remote)) return remote;
+    }
+  }
+  for (const ext of AUDIO_EXT_FALLBACKS) {
+    if (ext === currentExt.toLowerCase()) continue;
+    const alt = audioUrlWithExt(failedUrl, ext);
+    if (alt && !triedSet.has(alt)) return alt;
+  }
+  return null;
 }
 
 function audioIsReadyFor(url) {
@@ -1425,7 +1463,7 @@ function ensureAudioForVerse(idx, autoplay) {
   }
   const wasPlaying = autoplay || !audio.paused;
   currentAudioKey = v.audio;
-  audio.dataset.audioTriedRemote = '';
+  audio.dataset.audioTriedUrls = '';
   const onMeta = () => seekVerseStart(idx, wasPlaying);
   audio.addEventListener('loadedmetadata', onMeta, { once: true });
   audio.src = v.audio;
@@ -1559,31 +1597,36 @@ const loadStatusEl = document.getElementById('loadStatus');
 const infoAvatar = document.getElementById('infoAvatar');
 const infoName = document.getElementById('infoName');
 
-// If a local juz file 404s, fall back once to manifest.audioBase (Archive.org).
+// Local juz 404 → Archive.org; ogg 404 → opus/mp3 (juz 22+ on IA are opus-only).
 audio.addEventListener('error', () => {
   if (!isLocalReciter() || !LOCAL_MANIFEST) return;
   const v = VERSES[currentVerseIdx] || VERSES[0];
   if (!v) return;
-  if (audio.dataset.audioTriedRemote === '1') {
+  const from = currentAudioKey || v.audio;
+  if (!from) return;
+  const triedSet = new Set((audio.dataset.audioTriedUrls || '').split('|').filter(Boolean));
+  triedSet.add(from);
+  const next = nextAudioFallback(from, triedSet);
+  if (!next) {
     if (loadStatusEl) {
       loadStatusEl.textContent = 'Audio failed to load for this juz';
       loadStatusEl.classList.add('error');
     }
     return;
   }
-  const from = currentAudioKey || v.audio;
-  const remote = remoteAudioFallback(from);
-  if (!remote || remote === from) return;
-  audio.dataset.audioTriedRemote = '1';
-  VERSES.forEach(x => { if (x.audio === from) x.audio = remote; });
-  currentAudioKey = remote;
+  audio.dataset.audioTriedUrls = [...triedSet, next].join('|');
+  VERSES.forEach(x => { if (x.audio === from) x.audio = next; });
+  currentAudioKey = next;
   if (loadStatusEl) {
-    loadStatusEl.textContent = 'Local audio missing — trying Archive.org…';
+    const msg = /^https?:\/\//i.test(from)
+      ? 'Trying alternate audio format…'
+      : 'Local audio missing — trying Archive.org…';
+    loadStatusEl.textContent = msg;
     loadStatusEl.classList.remove('error');
   }
   const idx = currentVerseIdx || 0;
   audio.addEventListener('loadedmetadata', () => seekVerseStart(idx, true), { once: true });
-  audio.src = remote;
+  audio.src = next;
   audio.load();
 });
 

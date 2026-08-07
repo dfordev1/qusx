@@ -80,5 +80,5 @@ fully local) audio.
 - **Mushaf mode isn't pixel-identical to a printed mushaf** (no full kashida engine).
 - **Letter-level highlighting doesn't work in Mushaf mode** (QCF = one glyph per word).
 - **Tajweed COLRv1** — Chrome/Edge/Safari; Firefox falls back to plain glyphs.
-- **Al-Hadr pack** is incomplete for some juz (e.g. 24 / 30 gaps in the alignment release).
+- **Al-Hadr pack** is incomplete for some juz (e.g. 24 / 30 gaps in the alignment release); juz 22 and 25–29 stream as Opus from Archive.org (ogg fallback is automatic).
 - Some QUA recordings contain reciter retakes; the app re-lights the same on-screen word.
