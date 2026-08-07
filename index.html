@@ -1450,15 +1450,8 @@ function ensureAudioForVerse(idx, autoplay) {
   const v = VERSES[idx];
   if (!v) return;
   if (audioIsReadyFor(v.audio)) {
-    // Already on the right file — seek only if we're not already near the ayah.
-    if (autoplay) {
-      const target = v.source_offset_ms / 1000;
-      if (Math.abs(audio.currentTime - target) > 0.35) {
-        seekVerseStart(idx, true);
-      } else if (audio.paused) {
-        audio.play().catch(() => {});
-      }
-    }
+    // Resume from the current scrubber position — do not snap to ayah start.
+    if (autoplay && audio.paused) audio.play().catch(() => {});
     return;
   }
   const wasPlaying = autoplay || !audio.paused;
@@ -3277,8 +3270,7 @@ function jumpToVerse(idx, autoplay) {
   refreshScrubber(idx);
   refreshInfoBar(idx);
   if (isLocalReciter()) {
-    ensureAudioForVerse(idx, autoplay);
-    if (!autoplay && currentAudioKey === VERSES[idx].audio) seekVerseStart(idx, false);
+    seekVerseStart(idx, autoplay);
     scrollToPlayback(idx, true);
     return;
   }
@@ -3616,6 +3608,7 @@ document.addEventListener('visibilitychange', () => {
 
 playBtn.addEventListener('click', () => {
   if (audio.paused) {
+    if (browsing) exitBrowse();
     if (isLocalReciter() && VERSES[currentVerseIdx]) {
       ensureAudioForVerse(currentVerseIdx, true);
     } else {
@@ -3727,7 +3720,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowRight') showBrowseLetter(browseIdx - 1);  // RTL: right = prev
   if (e.key === 'Escape') exitBrowse();
 });
-[playBtn, seek].forEach(el => el.addEventListener('click', () => { if (browsing) exitBrowse(); }));
+seek.addEventListener('click', () => { if (browsing) exitBrowse(); });
 
 // init — probe optional Al-Hadr pack, resume last read when possible
 (async () => {
