@@ -288,8 +288,8 @@ html = """<!DOCTYPE html>
     width: 100%;
     text-align: center;
     font-family: 'UthmanicHafs', "Traditional Arabic", "Scheherazade New", serif;
-    font-size: 28px;
-    line-height: 2.35;
+    font-size: calc(var(--reader-size) * .88);
+    line-height: 1.55;
     color: var(--frame);
     margin: 8px 4px 20px;
     padding: 10px 8px 14px;
@@ -439,8 +439,8 @@ html = """<!DOCTYPE html>
   }
   .mushaf-text {
     direction: rtl;
-    font-size: clamp(18px, 3.6vw, 30px);
-    line-height: 2.35;
+    font-size: var(--reader-size);
+    line-height: var(--reader-leading);
     letter-spacing: 0;
     text-align: start;
     color: var(--ink);
@@ -988,8 +988,8 @@ html = """<!DOCTYPE html>
     }
     .mushaf-text,
     .mushaf-text.is-nastaleeq {
-      font-size: clamp(16px, 4.8vw, 22px);
-      line-height: 2.25;
+      font-size: var(--reader-size);
+      line-height: var(--reader-leading);
     }
     .bismillah { font-size: 20px; margin: 4px 0 12px; line-height: 2.3; }
     .brand-ar { font-size: 22px; }
