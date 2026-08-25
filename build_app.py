@@ -59,7 +59,7 @@ html = """<!DOCTYPE html>
      light ink (not just a green room with the same cream page). */
   :root {
     --reader-size: 32px;
-    --reader-leading: 1.68;
+    --reader-leading: 1.42;
     --bg: #090b0d;
     --bg-mid: #101318;
     --surface: #15191e;
@@ -323,6 +323,10 @@ html = """<!DOCTYPE html>
     font-size: var(--reader-size);
     line-height: var(--reader-leading);
     letter-spacing: 0;
+    word-spacing: 0;
+    font-kerning: normal;
+    font-variant-ligatures: common-ligatures contextual;
+    font-feature-settings: "kern" 1, "liga" 1, "calt" 1, "rlig" 1;
     color: var(--ink);
   }
   /* Mushaf mode: real KFGQPC V2 mushaf font (one precomposed glyph per
@@ -480,7 +484,16 @@ html = """<!DOCTYPE html>
   /* All reading modes inherit the selected QUSX layout's authentic
      line composition: exact word membership, full-line justification and
      short-line treatment. Do not centre or force-align Unicode text. */
-  .mushaf-line .word .letter { display: inline; }
+  .mushaf-line .word .letter {
+    display: inline;
+    margin: 0;
+    padding: 0;
+    letter-spacing: 0;
+    word-spacing: 0;
+    font-kerning: normal;
+    font-variant-ligatures: common-ligatures contextual;
+    font-feature-settings: "kern" 1, "liga" 1, "calt" 1, "rlig" 1;
+  }
   .letter.mark-only {
     display: inline-block;
     width: 0;
@@ -504,6 +517,10 @@ html = """<!DOCTYPE html>
     cursor: pointer;
   }
   .letter {
+    margin: 0;
+    padding: 0;
+    letter-spacing: 0;
+    word-spacing: 0;
     transition: color 0.08s, text-shadow 0.1s;
   }
   /* Active phoneme (Letter mode): soft tint + light glow. */
@@ -1237,8 +1254,8 @@ html = """<!DOCTYPE html>
       </label>
       <label class="type-control" for="lineHeightRange">
         <span>Spacing</span>
-        <input id="lineHeightRange" type="range" min="1.25" max="2.4" step="0.05" value="1.68" aria-label="Quran line spacing">
-        <strong id="lineHeightValue">1.68</strong>
+        <input id="lineHeightRange" type="range" min="1.1" max="2.1" step="0.02" value="1.42" aria-label="Quran line spacing">
+        <strong id="lineHeightValue">1.42</strong>
       </label>
     </div>
     <div class="chrome-more-row">
@@ -1803,17 +1820,17 @@ const textSizeNumber = document.getElementById('textSizeNumber');
 const lineHeightRange = document.getElementById('lineHeightRange');
 const lineHeightValue = document.getElementById('lineHeightValue');
 const typeReset = document.getElementById('typeReset');
-const TYPOGRAPHY_VERSION = '2';
+const TYPOGRAPHY_VERSION = '3';
 if (localStorage.getItem('quran-typography-version') !== TYPOGRAPHY_VERSION) {
   localStorage.setItem('quran-text-size-px', '32');
-  localStorage.setItem('quran-line-height', '1.68');
+  localStorage.setItem('quran-line-height', '1.42');
   localStorage.setItem('quran-typography-version', TYPOGRAPHY_VERSION);
 }
 let textSize = Number(localStorage.getItem('quran-text-size-px')) || 32;
-let lineHeight = Number(localStorage.getItem('quran-line-height')) || 1.68;
+let lineHeight = Number(localStorage.getItem('quran-line-height')) || 1.42;
 function clampTypography() {
   textSize = Math.max(12, Math.min(120, Math.round(textSize)));
-  lineHeight = Math.max(1.25, Math.min(2.4, Math.round(lineHeight * 100) / 100));
+  lineHeight = Math.max(1.1, Math.min(2.1, Math.round(lineHeight * 100) / 100));
 }
 function applyTypography() {
   clampTypography();
@@ -1832,7 +1849,7 @@ applyTypography();
 textSizeRange.addEventListener('input', () => { textSize = Number(textSizeRange.value); saveTypography(); applyTypography(); });
 textSizeNumber.addEventListener('input', () => { textSize = Number(textSizeNumber.value) || 32; saveTypography(); applyTypography(); });
 lineHeightRange.addEventListener('input', () => { lineHeight = Number(lineHeightRange.value); saveTypography(); applyTypography(); });
-typeReset.addEventListener('click', () => { textSize = 32; lineHeight = 1.68; saveTypography(); applyTypography(); });
+typeReset.addEventListener('click', () => { textSize = 32; lineHeight = 1.42; saveTypography(); applyTypography(); });
 const loadStatusEl = document.getElementById('loadStatus');
 const infoAvatar = document.getElementById('infoAvatar');
 const infoName = document.getElementById('infoName');
