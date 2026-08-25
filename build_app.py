@@ -44,7 +44,7 @@ html = """<!DOCTYPE html>
 <title>القرآن الكريم — Follow Along</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Amiri+Quran&family=Scheherazade+New:wght@400;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Amiri+Quran&family=Harmattan:wght@400;500;600;700&family=Lateef:wght@400;500;600;700&family=Mirza:wght@400;500;600;700&family=Noto+Naskh+Arabic:wght@400;500;600&family=Noto+Nastaliq+Urdu:wght@400;500;600&family=Scheherazade+New:wght@400;700&display=swap" rel="stylesheet">
 <script>
   // Applied before first paint: explicit localStorage choice wins; otherwise
   // default to light (Madani parchment). Dark is available via the toggle.
@@ -58,7 +58,8 @@ html = """<!DOCTYPE html>
   /* Madani mushaf system. Light = cream parchment; dark = dim parchment +
      light ink (not just a green room with the same cream page). */
   :root {
-    --reader-scale: 1;
+    --reader-size: 34px;
+    --reader-leading: 2.18;
     --bg: #090b0d;
     --bg-mid: #101318;
     --surface: #15191e;
@@ -319,8 +320,8 @@ html = """<!DOCTYPE html>
   }
   .verse-text {
     font-family: 'Scheherazade New', "Traditional Arabic", 'UthmanicHafs', serif;
-    font-size: clamp(calc(22px * var(--reader-scale)), calc(4vw * var(--reader-scale)), calc(34px * var(--reader-scale)));
-    line-height: 2.18;
+    font-size: var(--reader-size);
+    line-height: var(--reader-leading);
     letter-spacing: 0.01em;
     color: var(--ink);
   }
@@ -465,8 +466,8 @@ html = """<!DOCTYPE html>
     font-family: 'Scheherazade New', "Traditional Arabic", 'UthmanicHafs', serif;
   }
   .mushaf-text.is-nastaleeq {
-    font-size: clamp(calc(18px * var(--reader-scale)), calc(3.6vw * var(--reader-scale)), calc(30px * var(--reader-scale)));
-    line-height: 2.2;
+    font-size: var(--reader-size);
+    line-height: var(--reader-leading);
   }
   .mushaf-line .word {
     display: inline-block;
@@ -722,17 +723,64 @@ html = """<!DOCTYPE html>
   }
   .settings-action:hover { color: var(--accent); border-color: var(--frame); }
   .script-row select { font-weight: 600; }
-  .size-control {
-    display: grid;
-    grid-template-columns: auto minmax(110px, 1fr) 42px;
-    align-items: center;
-    gap: 9px;
-    width: min(260px, 100%);
-    color: var(--text-muted);
+  .typography-panel {
+    margin-top: 2px;
+    padding: 11px 12px 12px;
+    border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--surface-2) 72%, transparent);
     direction: ltr;
   }
-  .size-control input { width: 100%; margin: 0; }
-  .size-control strong { font-size: 10px; text-align: right; color: var(--accent); }
+  .type-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 9px;
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 650;
+  }
+  .type-panel-head button {
+    border: 0;
+    padding: 3px 6px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 10px;
+    cursor: pointer;
+  }
+  .type-panel-head button:hover { color: var(--accent); }
+  .type-control {
+    display: grid;
+    grid-template-columns: 48px minmax(100px, 1fr) 58px;
+    align-items: center;
+    gap: 9px;
+    min-height: 34px;
+    color: var(--text-muted);
+    font-size: 10px;
+  }
+  .type-control > input[type=range] { width: 100%; margin: 0; }
+  .type-control > strong { text-align: right; color: var(--accent); font-size: 10px; }
+  .number-unit {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 2px;
+    color: var(--accent);
+  }
+  .number-unit input {
+    width: 39px;
+    padding: 3px 4px;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    color: var(--accent);
+    text-align: right;
+    font: inherit;
+    outline: none;
+  }
+  .number-unit input:focus { border-color: var(--accent); }
+  .number-unit small { font-size: 9px; }
   .credit {
     color: var(--text-muted);
     font-size: 11px;
@@ -1174,13 +1222,21 @@ html = """<!DOCTYPE html>
         <option value="uthmani-simple">Uthmani Simple · no a‘rāb</option>
       </select>
     </div>
-    <div class="chrome-more-row size-row">
-      <label for="textSizeRange">Text size</label>
-      <div class="size-control">
-        <span aria-hidden="true">A</span>
-        <input id="textSizeRange" type="range" min="85" max="135" step="5" value="100" aria-label="Quran text size">
-        <strong id="textSizeValue">100%</strong>
+    <div class="typography-panel">
+      <div class="type-panel-head">
+        <span>Typography</span>
+        <button type="button" id="typeReset">Reset</button>
       </div>
+      <label class="type-control" for="textSizeRange">
+        <span>Size</span>
+        <input id="textSizeRange" type="range" min="18" max="72" step="1" value="34" aria-label="Quran text size">
+        <span class="number-unit"><input id="textSizeNumber" type="number" min="12" max="120" step="1" value="34" inputmode="numeric" aria-label="Exact Quran text size"><small>px</small></span>
+      </label>
+      <label class="type-control" for="lineHeightRange">
+        <span>Spacing</span>
+        <input id="lineHeightRange" type="range" min="1.5" max="3" step="0.05" value="2.18" aria-label="Quran line spacing">
+        <strong id="lineHeightValue">2.18</strong>
+      </label>
     </div>
     <div class="chrome-more-row">
       <label for="pageViewSelect">Pages</label>
@@ -1646,17 +1702,27 @@ function mushafSupportsTajweed() {
 // Unicode faces for Letter/Word modes. Mushaf Madani layouts still use QCF
 // per-page glyph fonts; this picker only affects letter/word highlighting.
 const TEXT_FONTS = [
-  ['auto', 'Auto (Letter → Scheherazade · Word → layout match)'],
-  ['scheherazade', 'Scheherazade New (best letter marks)'],
-  ['uthmanic', 'Uthmanic Hafs (closest Madani Unicode)'],
-  ['amiri-quran', 'Amiri Quran'],
+  ['auto', 'Automatic · match the reading mode'],
+  ['uthmanic', 'Uthmanic Hafs · Madani'],
+  ['scheherazade', 'Scheherazade New · classical'],
+  ['amiri-quran', 'Amiri Quran · literary'],
+  ['noto-naskh', 'Noto Naskh Arabic · clean'],
+  ['lateef', 'Lateef · open and elegant'],
+  ['harmattan', 'Harmattan · compact Naskh'],
+  ['mirza', 'Mirza · calligraphic'],
   ['indopak', 'IndoPak Nastaleeq'],
   ['kfgqpc-nastaleeq', 'KFGQPC Nastaleeq'],
+  ['noto-nastaliq', 'Noto Nastaliq Urdu'],
 ];
 const TEXT_FONT_CSS = {
   scheherazade: "'Scheherazade New', 'UthmanicHafs', 'Traditional Arabic', serif",
   uthmanic: "'UthmanicHafs', 'Scheherazade New', 'Traditional Arabic', serif",
   'amiri-quran': "'Amiri Quran', 'UthmanicHafs', 'Scheherazade New', serif",
+  'noto-naskh': "'Noto Naskh Arabic', 'Scheherazade New', serif",
+  lateef: "'Lateef', 'Scheherazade New', serif",
+  harmattan: "'Harmattan', 'Scheherazade New', serif",
+  mirza: "'Mirza', 'Scheherazade New', serif",
+  'noto-nastaliq': "'Noto Nastaliq Urdu', 'KFGQPCNastaleeq', serif",
   indopak: "'IndoPakNastaleeq', 'KFGQPCNastaleeq', 'Traditional Arabic', serif",
   'kfgqpc-nastaleeq': "'KFGQPCNastaleeq', 'IndoPakNastaleeq', 'Traditional Arabic', serif",
 };
@@ -1680,7 +1746,7 @@ function textFontCss() {
 }
 function textFontIsNastaleeq() {
   const k = resolveTextFontKey();
-  return k === 'indopak' || k === 'kfgqpc-nastaleeq';
+  return k === 'indopak' || k === 'kfgqpc-nastaleeq' || k === 'noto-nastaliq';
 }
 
 let mode = 'letter'; // 'letter' | 'word' | 'mushaf'
@@ -1708,22 +1774,34 @@ const reciterSelect = document.getElementById('reciterSelect');
 const scriptSelect = document.getElementById('scriptSelect');
 if (scriptSelect) scriptSelect.value = textScript;
 const textSizeRange = document.getElementById('textSizeRange');
-const textSizeValue = document.getElementById('textSizeValue');
-let textSize = Number(localStorage.getItem('quran-text-size')) || 100;
-textSize = Math.max(85, Math.min(135, Math.round(textSize / 5) * 5));
-function applyTextSize() {
-  document.documentElement.style.setProperty('--reader-scale', String(textSize / 100));
-  if (textSizeRange) textSizeRange.value = String(textSize);
-  if (textSizeValue) textSizeValue.textContent = textSize + '%';
+const textSizeNumber = document.getElementById('textSizeNumber');
+const lineHeightRange = document.getElementById('lineHeightRange');
+const lineHeightValue = document.getElementById('lineHeightValue');
+const typeReset = document.getElementById('typeReset');
+let textSize = Number(localStorage.getItem('quran-text-size-px')) || 34;
+let lineHeight = Number(localStorage.getItem('quran-line-height')) || 2.18;
+function clampTypography() {
+  textSize = Math.max(12, Math.min(120, Math.round(textSize)));
+  lineHeight = Math.max(1.5, Math.min(3, Math.round(lineHeight * 100) / 100));
 }
-applyTextSize();
-if (textSizeRange) {
-  textSizeRange.addEventListener('input', () => {
-    textSize = Number(textSizeRange.value) || 100;
-    localStorage.setItem('quran-text-size', String(textSize));
-    applyTextSize();
-  });
+function applyTypography() {
+  clampTypography();
+  document.documentElement.style.setProperty('--reader-size', textSize + 'px');
+  document.documentElement.style.setProperty('--reader-leading', String(lineHeight));
+  if (textSizeRange) textSizeRange.value = String(Math.max(18, Math.min(72, textSize)));
+  if (textSizeNumber) textSizeNumber.value = String(textSize);
+  if (lineHeightRange) lineHeightRange.value = String(lineHeight);
+  if (lineHeightValue) lineHeightValue.textContent = lineHeight.toFixed(2);
 }
+function saveTypography() {
+  localStorage.setItem('quran-text-size-px', String(textSize));
+  localStorage.setItem('quran-line-height', String(lineHeight));
+}
+applyTypography();
+textSizeRange.addEventListener('input', () => { textSize = Number(textSizeRange.value); saveTypography(); applyTypography(); });
+textSizeNumber.addEventListener('input', () => { textSize = Number(textSizeNumber.value) || 34; saveTypography(); applyTypography(); });
+lineHeightRange.addEventListener('input', () => { lineHeight = Number(lineHeightRange.value); saveTypography(); applyTypography(); });
+typeReset.addEventListener('click', () => { textSize = 34; lineHeight = 2.18; saveTypography(); applyTypography(); });
 const loadStatusEl = document.getElementById('loadStatus');
 const infoAvatar = document.getElementById('infoAvatar');
 const infoName = document.getElementById('infoName');
