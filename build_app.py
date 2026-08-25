@@ -58,8 +58,8 @@ html = """<!DOCTYPE html>
   /* Madani mushaf system. Light = cream parchment; dark = dim parchment +
      light ink (not just a green room with the same cream page). */
   :root {
-    --reader-size: 34px;
-    --reader-leading: 2.18;
+    --reader-size: 32px;
+    --reader-leading: 1.68;
     --bg: #090b0d;
     --bg-mid: #101318;
     --surface: #15191e;
@@ -322,7 +322,7 @@ html = """<!DOCTYPE html>
     font-family: 'Scheherazade New', "Traditional Arabic", 'UthmanicHafs', serif;
     font-size: var(--reader-size);
     line-height: var(--reader-leading);
-    letter-spacing: 0.01em;
+    letter-spacing: 0;
     color: var(--ink);
   }
   /* Mushaf mode: real KFGQPC V2 mushaf font (one precomposed glyph per
@@ -476,6 +476,16 @@ html = """<!DOCTYPE html>
     /* Do not clip glyph overhang (meem bowls, nuun tails, dots). */
     overflow: visible;
     min-width: 0;
+  }
+  /* Unicode reading modes use natural book spacing. The printed QCF Mushaf
+     keeps its edition-specific justified line treatment. */
+  .mushaf-text.with-letters .mushaf-line {
+    justify-content: center;
+    gap: .38em;
+  }
+  .mushaf-text.with-letters .mushaf-line.is-short {
+    justify-content: center;
+    gap: .38em;
   }
   .mushaf-line .word .letter { display: inline; }
   .letter.mark-only {
@@ -1229,13 +1239,13 @@ html = """<!DOCTYPE html>
       </div>
       <label class="type-control" for="textSizeRange">
         <span>Size</span>
-        <input id="textSizeRange" type="range" min="18" max="72" step="1" value="34" aria-label="Quran text size">
-        <span class="number-unit"><input id="textSizeNumber" type="number" min="12" max="120" step="1" value="34" inputmode="numeric" aria-label="Exact Quran text size"><small>px</small></span>
+        <input id="textSizeRange" type="range" min="18" max="72" step="1" value="32" aria-label="Quran text size">
+        <span class="number-unit"><input id="textSizeNumber" type="number" min="12" max="120" step="1" value="32" inputmode="numeric" aria-label="Exact Quran text size"><small>px</small></span>
       </label>
       <label class="type-control" for="lineHeightRange">
         <span>Spacing</span>
-        <input id="lineHeightRange" type="range" min="1.5" max="3" step="0.05" value="2.18" aria-label="Quran line spacing">
-        <strong id="lineHeightValue">2.18</strong>
+        <input id="lineHeightRange" type="range" min="1.25" max="2.4" step="0.05" value="1.68" aria-label="Quran line spacing">
+        <strong id="lineHeightValue">1.68</strong>
       </label>
     </div>
     <div class="chrome-more-row">
@@ -1800,11 +1810,17 @@ const textSizeNumber = document.getElementById('textSizeNumber');
 const lineHeightRange = document.getElementById('lineHeightRange');
 const lineHeightValue = document.getElementById('lineHeightValue');
 const typeReset = document.getElementById('typeReset');
-let textSize = Number(localStorage.getItem('quran-text-size-px')) || 34;
-let lineHeight = Number(localStorage.getItem('quran-line-height')) || 2.18;
+const TYPOGRAPHY_VERSION = '2';
+if (localStorage.getItem('quran-typography-version') !== TYPOGRAPHY_VERSION) {
+  localStorage.setItem('quran-text-size-px', '32');
+  localStorage.setItem('quran-line-height', '1.68');
+  localStorage.setItem('quran-typography-version', TYPOGRAPHY_VERSION);
+}
+let textSize = Number(localStorage.getItem('quran-text-size-px')) || 32;
+let lineHeight = Number(localStorage.getItem('quran-line-height')) || 1.68;
 function clampTypography() {
   textSize = Math.max(12, Math.min(120, Math.round(textSize)));
-  lineHeight = Math.max(1.5, Math.min(3, Math.round(lineHeight * 100) / 100));
+  lineHeight = Math.max(1.25, Math.min(2.4, Math.round(lineHeight * 100) / 100));
 }
 function applyTypography() {
   clampTypography();
@@ -1821,9 +1837,9 @@ function saveTypography() {
 }
 applyTypography();
 textSizeRange.addEventListener('input', () => { textSize = Number(textSizeRange.value); saveTypography(); applyTypography(); });
-textSizeNumber.addEventListener('input', () => { textSize = Number(textSizeNumber.value) || 34; saveTypography(); applyTypography(); });
+textSizeNumber.addEventListener('input', () => { textSize = Number(textSizeNumber.value) || 32; saveTypography(); applyTypography(); });
 lineHeightRange.addEventListener('input', () => { lineHeight = Number(lineHeightRange.value); saveTypography(); applyTypography(); });
-typeReset.addEventListener('click', () => { textSize = 34; lineHeight = 2.18; saveTypography(); applyTypography(); });
+typeReset.addEventListener('click', () => { textSize = 32; lineHeight = 1.68; saveTypography(); applyTypography(); });
 const loadStatusEl = document.getElementById('loadStatus');
 const infoAvatar = document.getElementById('infoAvatar');
 const infoName = document.getElementById('infoName');
