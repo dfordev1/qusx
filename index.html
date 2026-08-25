@@ -551,7 +551,48 @@
     gap: 6px;
     z-index: 40;
     box-shadow: 0 14px 44px rgba(0,0,0,.22);
+    transition: transform .32s cubic-bezier(.2,.8,.2,1), opacity .24s ease;
   }
+  .controls.is-concealed {
+    transform: translate(-50%, calc(100% + 28px));
+    opacity: 0;
+    pointer-events: none;
+  }
+  .controls-reveal {
+    position: fixed;
+    z-index: 39;
+    bottom: 9px;
+    left: 50%;
+    transform: translateX(-50%) translateY(18px);
+    width: 44px;
+    height: 28px;
+    border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--chrome) 94%, transparent);
+    color: var(--text-muted);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s, transform .25s;
+    cursor: pointer;
+  }
+  .controls-reveal.show {
+    opacity: .86;
+    pointer-events: auto;
+    transform: translateX(-50%) translateY(0);
+  }
+  .transport-btn {
+    width: 30px;
+    height: 30px;
+    flex: 0 0 auto;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .transport-btn:hover { color: var(--accent); background: var(--accent-soft); }
   .scrubber {
     display: flex;
     gap: 3px;
@@ -1298,7 +1339,9 @@
         <div class="info-meta" id="infoMeta">Al-Fatiha 1</div>
       </div>
     </div>
-    <button class="play-btn" id="playBtn">&#9658;</button>
+    <button class="transport-btn" id="prevAyahBtn" title="Previous ayah" aria-label="Previous ayah">&#8249;</button>
+    <button class="play-btn" id="playBtn" aria-label="Play">&#9658;</button>
+    <button class="transport-btn" id="nextAyahBtn" title="Next ayah" aria-label="Next ayah">&#8250;</button>
     <select id="speedSelect" class="speed-select" title="Playback speed" aria-label="Playback speed">
       <option value="0.75">0.75×</option>
       <option value="1" selected>1×</option>
@@ -1321,6 +1364,7 @@
     <button id="tajweedToggle" class="tajweed-btn" disabled>Tajweed</button>
   </div>
 </div>
+<button type="button" id="controlsReveal" class="controls-reveal" aria-label="Show playback controls">&#9650;</button>
 
 <div class="credit">Open timings &amp; audio · <a href="https://github.com/Wider-Community/quranic-universal-audio" target="_blank">QUA</a> · <a href="https://github.com/dfordev1/usxv2" target="_blank">QUSX</a> · Hafs &#39;an &#39;Asim</div>
 
@@ -1797,6 +1841,10 @@ const versesEl = document.getElementById('verses');
 const mushafPagesEl = document.getElementById('mushafPages');
 const audio = document.getElementById('player');
 const playBtn = document.getElementById('playBtn');
+const prevAyahBtn = document.getElementById('prevAyahBtn');
+const nextAyahBtn = document.getElementById('nextAyahBtn');
+const controlsEl = document.querySelector('.controls');
+const controlsRevealBtn = document.getElementById('controlsReveal');
 const seek = document.getElementById('seek');
 const curTimeEl = document.getElementById('curTime');
 const totTimeEl = document.getElementById('totTime');
@@ -1929,7 +1977,7 @@ function bindGrammarHandlers(wordSpan, morph, v, wIdx) {
   });
   wordSpan.addEventListener('blur', hideMorphTip);
   wordSpan.addEventListener('click', () => {
-    if (grammarClickOn) showInspector(wordSpan, morph, v, wIdx);
+    if (grammarClickOn || experience === 'explore') showInspector(wordSpan, morph, v, wIdx);
   });
 }
 
@@ -3905,12 +3953,14 @@ audio.addEventListener('timeupdate', () => {
 });
 
 audio.addEventListener('play', () => {
+  revealPlaybackChrome();
   playBtn.innerHTML = '&#10074;&#10074;';
   applyPlaybackSpeed(speedSelect ? speedSelect.value : (localStorage.getItem('quran-playback-speed') || '1'));
 });
 audio.addEventListener('pause', () => {
   playBtn.innerHTML = '&#9658;';
   saveResumeState();
+  scheduleChromeConceal();
 });
 audio.addEventListener('ended', () => {
   playBtn.innerHTML = '&#9658;';
@@ -3929,6 +3979,15 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') saveResumeState();
 });
 
+prevAyahBtn.addEventListener('click', () => {
+  revealPlaybackChrome();
+  if (currentVerseIdx > 0) jumpToVerse(currentVerseIdx - 1, !audio.paused);
+});
+nextAyahBtn.addEventListener('click', () => {
+  revealPlaybackChrome();
+  if (currentVerseIdx < VERSES.length - 1) jumpToVerse(currentVerseIdx + 1, !audio.paused);
+});
+
 playBtn.addEventListener('click', () => {
   if (audio.paused) {
     if (browsing) exitBrowse();
@@ -3941,6 +4000,34 @@ playBtn.addEventListener('click', () => {
     audio.pause();
   }
 });
+
+let chromeConcealTimer = null;
+function revealPlaybackChrome() {
+  if (chromeConcealTimer) clearTimeout(chromeConcealTimer);
+  chromeConcealTimer = null;
+  controlsEl.classList.remove('is-concealed');
+  controlsRevealBtn.classList.remove('show');
+}
+function concealPlaybackChrome() {
+  if (!audio.paused || chromeMoreEl && !chromeMoreEl.hidden || wordInspectorEl.classList.contains('show')) return;
+  controlsEl.classList.add('is-concealed');
+  controlsRevealBtn.classList.add('show');
+}
+function scheduleChromeConceal() {
+  if (chromeConcealTimer) clearTimeout(chromeConcealTimer);
+  if (!audio.paused) return;
+  chromeConcealTimer = setTimeout(concealPlaybackChrome, 2400);
+}
+controlsRevealBtn.addEventListener('click', () => {
+  revealPlaybackChrome();
+  scheduleChromeConceal();
+});
+controlsEl.addEventListener('pointerdown', revealPlaybackChrome);
+mushafPagesEl.addEventListener('click', () => {
+  if (controlsEl.classList.contains('is-concealed')) revealPlaybackChrome();
+  else scheduleChromeConceal();
+});
+scheduleChromeConceal();
 
 seek.addEventListener('mousedown', () => userSeeking = true);
 seek.addEventListener('touchstart', () => userSeeking = true);
