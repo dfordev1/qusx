@@ -1528,24 +1528,41 @@ function seekVerseStart(idx, autoplay) {
 
 // Seek to an absolute ms position in the current (or target) verse's audio file.
 function handleWordTap(v, wIdx, verseIdx, absStart) {
+  cancelTapWordStop();
   if (!tapWordMode) {
-    handleWordTap(v, wIdx, verseIdx, absStart);
+    seekToWordMs(absStart, verseIdx, true);
     return;
   }
-  const win = getWordWindows(v).find(row => row[0] === wIdx);
-  const absEnd = v.source_offset_ms + (win ? win[2] : ((v.words || []).find(row => row[0] === wIdx) || [0, 0, 500])[2]);
-  const token = ++tapPlaybackToken;
-  if (tapStopHandler) audio.removeEventListener('timeupdate', tapStopHandler);
-  tapStopHandler = () => {
-    if (token !== tapPlaybackToken) return;
-    if (audio.currentTime * 1000 >= absEnd - 12) {
-      audio.pause();
-      audio.removeEventListener('timeupdate', tapStopHandler);
-      tapStopHandler = null;
-    }
-  };
-  audio.addEventListener('timeupdate', tapStopHandler);
+
+  // Standalone playback must use the measured word end. getWordWindows()
+  // deliberately fills pauses up to the next word for continuous highlighting,
+  // so using it here leaks audible audio from the following word.
+  const rows = [...(v.words || [])].sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+  const rowIndex = rows.findIndex(row => row[0] === wIdx);
+  const row = rowIndex >= 0 ? rows[rowIndex] : null;
+  const startRel = row ? row[1] : Math.max(0, absStart - v.source_offset_ms);
+  const nextStart = rowIndex >= 0 && rows[rowIndex + 1] ? rows[rowIndex + 1][1] : null;
+  let endRel = row && row[2] > startRel ? row[2] : (nextStart != null ? nextStart : startRel + 450);
+  if (nextStart != null) endRel = Math.min(endRel, nextStart);
+  const absEnd = v.source_offset_ms + Math.max(startRel + 45, endRel);
+  // Stop a few milliseconds inside the boundary to absorb output-buffer latency.
+  const stopAt = Math.max(absStart + 35, absEnd - 20);
+  const token = tapPlaybackToken;
+
   seekToWordMs(absStart, verseIdx, true);
+  let enteredSegment = false;
+  const watchFrame = () => {
+    if (token !== tapPlaybackToken) return;
+    const now = audio.currentTime * 1000;
+    if (now >= absStart - 25 && now < stopAt) enteredSegment = true;
+    if (enteredSegment && now >= stopAt) {
+      audio.pause();
+      tapFrameId = 0;
+      return;
+    }
+    tapFrameId = requestAnimationFrame(watchFrame);
+  };
+  tapFrameId = requestAnimationFrame(watchFrame);
 }
 
 function seekToWordMs(absMs, verseIdx, autoplay) {
@@ -1754,8 +1771,13 @@ document.body.classList.add('follow-mode-' + mode);
 let textScript = localStorage.getItem('quran-text-script') || 'uthmani';
 if (!['uthmani', 'uthmani-simple'].includes(textScript)) textScript = 'uthmani';
 let tapWordMode = localStorage.getItem('quran-tap-word-audio') === '1';
-let tapStopHandler = null;
+let tapFrameId = 0;
 let tapPlaybackToken = 0;
+function cancelTapWordStop() {
+  tapPlaybackToken++;
+  if (tapFrameId) cancelAnimationFrame(tapFrameId);
+  tapFrameId = 0;
+}
 let tajweedOn = false; // Mushaf-mode-only: colored tajweed rules via QCF V4
 let currentVerseIdx = 0;
 let userSeeking = false;
@@ -2401,7 +2423,7 @@ function buildTimedWordSpan(v, wIdx, verseIdx) {
     wordSpan.dataset.startMs = absStart;
     wordSpan.addEventListener('click', (e) => {
       e.stopPropagation();
-      seekToWordMs(absStart, verseIdx, true);
+      handleWordTap(v, wIdx, verseIdx, absStart);
     });
     bindGrammarHandlers(wordSpan, morphFor(v, wIdx), v, wIdx);
     return wordSpan;
@@ -3916,10 +3938,7 @@ syncTapWordButton();
 tapWordBtn.addEventListener('click', () => {
   tapWordMode = !tapWordMode;
   localStorage.setItem('quran-tap-word-audio', tapWordMode ? '1' : '0');
-  if (!tapWordMode && tapStopHandler) {
-    audio.removeEventListener('timeupdate', tapStopHandler);
-    tapStopHandler = null;
-  }
+  if (!tapWordMode) cancelTapWordStop();
   syncTapWordButton();
 });
 if (scriptSelect) {
