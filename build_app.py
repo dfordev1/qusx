@@ -718,6 +718,10 @@ html = """<!DOCTYPE html>
     transition: color 0.15s, background 0.15s;
   }
   .mode-toggle button:hover { color: var(--text); }
+  .experience-toggle { width: min(330px, 100%); }
+  .experience-toggle button { flex: 1; min-width: 0; }
+  .legacy-mode-controls { display: none !important; }
+  .settings-hidden { display: none !important; }
   .mode-toggle button.on {
     color: var(--accent);
     background: var(--accent-soft);
@@ -801,6 +805,7 @@ html = """<!DOCTYPE html>
   }
   .number-unit input:focus { border-color: var(--accent); }
   .number-unit small { font-size: 9px; }
+  .about-wrap, .credit { display: none; }
   .credit {
     color: var(--text-muted);
     font-size: 11px;
@@ -1228,10 +1233,24 @@ html = """<!DOCTYPE html>
       <select id="reciterSelect"></select>
     </div>
     <div class="chrome-more-row">
-      <label for="layoutSelect">Layout</label>
-      <select id="layoutSelect" title="Print layout — page/line breaks + matching script fonts"></select>
+      <label for="layoutSelect">Edition</label>
+      <select id="layoutSelect" title="Print edition — authentic page and line composition"></select>
     </div>
     <div class="chrome-more-row">
+      <label for="readingStyleSelect">Reading</label>
+      <select id="readingStyleSelect">
+        <option value="authentic">Authentic Mushaf</option>
+        <option value="reflow">Reflow Reader</option>
+      </select>
+    </div>
+    <div class="chrome-more-row">
+      <label for="followModeSelect">Following</label>
+      <select id="followModeSelect">
+        <option value="word">Highlight words</option>
+        <option value="letter">Highlight letters</option>
+      </select>
+    </div>
+    <div class="chrome-more-row" id="fontRow">
       <label for="fontSelect">Font</label>
       <select id="fontSelect" title="Unicode text font for Letter/Word modes"></select>
     </div>
@@ -1242,7 +1261,7 @@ html = """<!DOCTYPE html>
         <option value="uthmani-simple">Uthmani Simple · no a‘rāb</option>
       </select>
     </div>
-    <div class="typography-panel">
+    <div class="typography-panel" id="typographyPanel">
       <div class="type-panel-head">
         <span>Typography</span>
         <button type="button" id="typeReset">Reset</button>
@@ -1327,13 +1346,17 @@ html = """<!DOCTYPE html>
     <input type="range" id="seek" min="0" max="1000" value="0">
     <span class="time" id="totTime">0:00</span>
   </div>
-  <div class="mode-toggle" aria-label="Follow highlighting">
-    <span class="mode-label">FOLLOW</span>
-    <button id="modeLetter" class="on" title="Highlight the current letter">Letters</button>
-    <button id="modeWord" title="Highlight the current word">Words</button>
-    <button id="modeMushaf" title="Use the selected Mushaf layout">Mushaf</button>
-    <button id="tapWordToggle" title="Tap a word to hear only that word">Tap words</button>
-    <button id="tajweedToggle" class="tajweed-btn" disabled title="Colored tajweed rules in vocalized Mushaf mode">Tajweed</button>
+  <div class="mode-toggle experience-toggle" aria-label="Reading experience">
+    <button id="experienceRead" class="on" title="Uninterrupted Quran reading">Read</button>
+    <button id="experienceFollow" title="Follow the recitation">Follow</button>
+    <button id="experienceExplore" title="Tap and study individual words">Explore</button>
+  </div>
+  <div class="legacy-mode-controls" aria-hidden="true">
+    <button id="modeLetter">Letters</button>
+    <button id="modeWord">Words</button>
+    <button id="modeMushaf">Mushaf</button>
+    <button id="tapWordToggle">Tap words</button>
+    <button id="tajweedToggle" class="tajweed-btn" disabled>Tajweed</button>
   </div>
 </div>
 
@@ -1786,7 +1809,13 @@ function textFontIsNastaleeq() {
   return k === 'indopak' || k === 'kfgqpc-nastaleeq' || k === 'noto-nastaliq';
 }
 
-let mode = 'letter'; // 'letter' | 'word' | 'mushaf'
+let mode = 'letter'; // internal renderer: 'letter' | 'word' | 'mushaf'
+let experience = localStorage.getItem('quran-experience') || 'read';
+if (!['read', 'follow', 'explore'].includes(experience)) experience = 'read';
+let readingStyle = localStorage.getItem('quran-reading-style') || 'authentic';
+if (!['authentic', 'reflow'].includes(readingStyle)) readingStyle = 'authentic';
+let followPreference = localStorage.getItem('quran-follow-mode') || 'word';
+if (!['word', 'letter'].includes(followPreference)) followPreference = 'word';
 document.body.classList.add('follow-mode-' + mode);
 let textScript = localStorage.getItem('quran-text-script') || 'uthmani';
 if (!['uthmani', 'uthmani-simple'].includes(textScript)) textScript = 'uthmani';
@@ -1815,6 +1844,12 @@ const browseModeSelect = document.getElementById('browseModeSelect');
 const reciterSelect = document.getElementById('reciterSelect');
 const scriptSelect = document.getElementById('scriptSelect');
 if (scriptSelect) scriptSelect.value = textScript;
+const readingStyleSelect = document.getElementById('readingStyleSelect');
+const followModeSelect = document.getElementById('followModeSelect');
+const typographyPanel = document.getElementById('typographyPanel');
+const fontRow = document.getElementById('fontRow');
+if (readingStyleSelect) readingStyleSelect.value = readingStyle;
+if (followModeSelect) followModeSelect.value = followPreference;
 const textSizeRange = document.getElementById('textSizeRange');
 const textSizeNumber = document.getElementById('textSizeNumber');
 const lineHeightRange = document.getElementById('lineHeightRange');
@@ -4015,6 +4050,55 @@ function setMode(m) {
   }
   clearHighlights();
 }
+
+const experienceButtons = {
+  read: document.getElementById('experienceRead'),
+  follow: document.getElementById('experienceFollow'),
+  explore: document.getElementById('experienceExplore'),
+};
+function setTapWordMode(on) {
+  tapWordMode = !!on;
+  localStorage.setItem('quran-tap-word-audio', tapWordMode ? '1' : '0');
+  if (!tapWordMode) cancelTapWordStop();
+  syncTapWordButton();
+}
+function applyExperience(shouldRender = true) {
+  document.body.dataset.experience = experience;
+  document.body.dataset.readingStyle = readingStyle;
+  Object.entries(experienceButtons).forEach(([key, btn]) => btn.classList.toggle('on', key === experience));
+  const reflow = readingStyle === 'reflow';
+  typographyPanel.classList.toggle('settings-hidden', !reflow);
+  fontRow.classList.toggle('settings-hidden', !reflow);
+  if (experience === 'explore') {
+    setTapWordMode(true);
+    setMode('word');
+  } else if (experience === 'follow') {
+    setTapWordMode(false);
+    setMode(followPreference);
+  } else {
+    setTapWordMode(false);
+    setMode(reflow ? 'word' : 'mushaf');
+  }
+  if (shouldRender && VERSES.length) renderMushafPages();
+}
+Object.entries(experienceButtons).forEach(([key, btn]) => {
+  btn.addEventListener('click', () => {
+    experience = key;
+    localStorage.setItem('quran-experience', experience);
+    applyExperience();
+  });
+});
+readingStyleSelect.addEventListener('change', () => {
+  readingStyle = readingStyleSelect.value;
+  localStorage.setItem('quran-reading-style', readingStyle);
+  applyExperience();
+});
+followModeSelect.addEventListener('change', () => {
+  followPreference = followModeSelect.value;
+  localStorage.setItem('quran-follow-mode', followPreference);
+  if (experience === 'follow') applyExperience();
+});
+applyExperience(false);
 
 // --- Letter-browse mode: step through every letter in the mushaf one at a
 // time (like paging through the dataset's letter tier directly) instead of
