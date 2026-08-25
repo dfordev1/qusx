@@ -442,12 +442,14 @@
   /* Unicode reading modes use natural book spacing. The printed QCF Mushaf
      keeps its edition-specific justified line treatment. */
   .mushaf-text.with-letters .mushaf-line {
-    justify-content: center;
-    gap: .38em;
+    justify-content: flex-start;
+    gap: .34em;
+    direction: rtl;
+    text-align: right;
   }
   .mushaf-text.with-letters .mushaf-line.is-short {
-    justify-content: center;
-    gap: .38em;
+    justify-content: flex-start;
+    gap: .34em;
   }
   .mushaf-line .word .letter { display: inline; }
   .letter.mark-only {
