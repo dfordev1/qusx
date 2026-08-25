@@ -59,27 +59,27 @@ html = """<!DOCTYPE html>
      light ink (not just a green room with the same cream page). */
   :root {
     --reader-scale: 1;
-    --bg: #0c100e;
-    --bg-mid: #121816;
-    --surface: #1a1f1c;
-    --surface-2: #222824;
-    --chrome: rgba(10, 12, 11, 0.94);
-    --border: #3a433c;
-    --text: #e6e0d4;
-    --text-muted: #c2bbb0;
-    --accent: #d4b45a;
-    --accent-2: #b8953a;
-    --accent-soft: rgba(212, 180, 90, 0.2);
-    --frame: #c4a04a;
-    --frame-inner: #4a6b58;
-    --page: #1c1914;
-    --page-edge: #2a251c;
-    --ink: #ebe3d2;
-    --ink-muted: #9a8f7a;
-    --shadow: 0 14px 40px rgba(0,0,0,0.55);
-    --bg-glow: rgba(196, 160, 74, 0.07);
-    --page-grain: rgba(255, 240, 200, 0.03);
-    --page-sheen: rgba(255,255,255,0.04);
+    --bg: #090b0d;
+    --bg-mid: #101318;
+    --surface: #15191e;
+    --surface-2: #1b2026;
+    --chrome: rgba(13, 16, 20, 0.94);
+    --border: #2b323a;
+    --text: #f0ede5;
+    --text-muted: #9fa6ad;
+    --accent: #d8b861;
+    --accent-2: #b99338;
+    --accent-soft: rgba(216, 184, 97, 0.16);
+    --frame: #bfa253;
+    --frame-inner: #657a70;
+    --page: #111418;
+    --page-edge: #1b2025;
+    --ink: #f3f0e8;
+    --ink-muted: #8f969d;
+    --shadow: 0 18px 54px rgba(0,0,0,0.48);
+    --bg-glow: rgba(216, 184, 97, 0.045);
+    --page-grain: rgba(255,255,255,0.012);
+    --page-sheen: rgba(255,255,255,0.022);
   }
   :root[data-theme="light"] {
     --bg: #d9c9a8;
@@ -1256,6 +1256,7 @@ html = """<!DOCTYPE html>
     <button id="modeLetter" class="on" title="Highlight the current letter">Letters</button>
     <button id="modeWord" title="Highlight the current word">Words</button>
     <button id="modeMushaf" title="Use the selected Mushaf layout">Mushaf</button>
+    <button id="tapWordToggle" title="Tap a word to hear only that word">Tap words</button>
     <button id="tajweedToggle" class="tajweed-btn" disabled title="Colored tajweed rules in vocalized Mushaf mode">Tajweed</button>
   </div>
 </div>
@@ -1470,6 +1471,27 @@ function seekVerseStart(idx, autoplay) {
 }
 
 // Seek to an absolute ms position in the current (or target) verse's audio file.
+function handleWordTap(v, wIdx, verseIdx, absStart) {
+  if (!tapWordMode) {
+    handleWordTap(v, wIdx, verseIdx, absStart);
+    return;
+  }
+  const win = getWordWindows(v).find(row => row[0] === wIdx);
+  const absEnd = v.source_offset_ms + (win ? win[2] : ((v.words || []).find(row => row[0] === wIdx) || [0, 0, 500])[2]);
+  const token = ++tapPlaybackToken;
+  if (tapStopHandler) audio.removeEventListener('timeupdate', tapStopHandler);
+  tapStopHandler = () => {
+    if (token !== tapPlaybackToken) return;
+    if (audio.currentTime * 1000 >= absEnd - 12) {
+      audio.pause();
+      audio.removeEventListener('timeupdate', tapStopHandler);
+      tapStopHandler = null;
+    }
+  };
+  audio.addEventListener('timeupdate', tapStopHandler);
+  seekToWordMs(absStart, verseIdx, true);
+}
+
 function seekToWordMs(absMs, verseIdx, autoplay) {
   const v = VERSES[verseIdx];
   if (!v) return;
@@ -1665,6 +1687,9 @@ let mode = 'letter'; // 'letter' | 'word' | 'mushaf'
 document.body.classList.add('follow-mode-' + mode);
 let textScript = localStorage.getItem('quran-text-script') || 'uthmani';
 if (!['uthmani', 'uthmani-simple'].includes(textScript)) textScript = 'uthmani';
+let tapWordMode = localStorage.getItem('quran-tap-word-audio') === '1';
+let tapStopHandler = null;
+let tapPlaybackToken = 0;
 let tajweedOn = false; // Mushaf-mode-only: colored tajweed rules via QCF V4
 let currentVerseIdx = 0;
 let userSeeking = false;
@@ -2402,7 +2427,7 @@ function buildTimedWordSpan(v, wIdx, verseIdx) {
     wordSpan.dataset.startMs = wordStart;
     wordSpan.addEventListener('click', (e) => {
       e.stopPropagation();
-      seekToWordMs(wordStart, verseIdx, true);
+      handleWordTap(v, wIdx, verseIdx, wordStart);
     });
   }
   bindGrammarHandlers(wordSpan, morphFor(v, wIdx), v, wIdx);
@@ -2481,7 +2506,7 @@ function buildMushafGlyphSpan(v, wIdx, wordStart, verseIdx) {
   if (wordStart != null) {
     gSpan.addEventListener('click', (e) => {
       e.stopPropagation();
-      seekToWordMs(wordStart, verseIdx, true);
+      handleWordTap(v, wIdx, verseIdx, wordStart);
     });
   }
   return gSpan;
@@ -2501,7 +2526,7 @@ function buildMushafPlainSpan(v, wIdx, wordText, wordStart, verseIdx) {
   if (wordStart != null) {
     gSpan.addEventListener('click', (e) => {
       e.stopPropagation();
-      seekToWordMs(wordStart, verseIdx, true);
+      handleWordTap(v, wIdx, verseIdx, wordStart);
     });
   }
   return gSpan;
@@ -3804,6 +3829,21 @@ seek.addEventListener('change', () => {
 document.getElementById('modeLetter').addEventListener('click', () => setMode('letter'));
 document.getElementById('modeWord').addEventListener('click', () => setMode('word'));
 document.getElementById('modeMushaf').addEventListener('click', () => setMode('mushaf'));
+const tapWordBtn = document.getElementById('tapWordToggle');
+function syncTapWordButton() {
+  tapWordBtn.classList.toggle('on', tapWordMode);
+  tapWordBtn.setAttribute('aria-pressed', tapWordMode ? 'true' : 'false');
+}
+syncTapWordButton();
+tapWordBtn.addEventListener('click', () => {
+  tapWordMode = !tapWordMode;
+  localStorage.setItem('quran-tap-word-audio', tapWordMode ? '1' : '0');
+  if (!tapWordMode && tapStopHandler) {
+    audio.removeEventListener('timeupdate', tapStopHandler);
+    tapStopHandler = null;
+  }
+  syncTapWordButton();
+});
 if (scriptSelect) {
   scriptSelect.addEventListener('change', async () => {
     textScript = scriptSelect.value;
