@@ -477,18 +477,9 @@ html = """<!DOCTYPE html>
     overflow: visible;
     min-width: 0;
   }
-  /* Unicode reading modes use natural book spacing. The printed QCF Mushaf
-     keeps its edition-specific justified line treatment. */
-  .mushaf-text.with-letters .mushaf-line {
-    justify-content: flex-start;
-    gap: .34em;
-    direction: rtl;
-    text-align: right;
-  }
-  .mushaf-text.with-letters .mushaf-line.is-short {
-    justify-content: flex-start;
-    gap: .34em;
-  }
+  /* All reading modes inherit the selected QUSX layout's authentic
+     line composition: exact word membership, full-line justification and
+     short-line treatment. Do not centre or force-align Unicode text. */
   .mushaf-line .word .letter { display: inline; }
   .letter.mark-only {
     display: inline-block;
