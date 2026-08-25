@@ -552,16 +552,21 @@ html = """<!DOCTYPE html>
   }
   .controls {
     position: fixed;
-    bottom: 0; left: 0; right: 0;
-    background: var(--chrome);
-    backdrop-filter: blur(14px);
-    border-top: 1px solid var(--border);
-    padding: 5px 12px 7px;
+    bottom: 12px;
+    left: 50%;
+    width: min(840px, calc(100% - 24px));
+    transform: translateX(-50%);
+    background: color-mix(in srgb, var(--chrome) 94%, transparent);
+    backdrop-filter: blur(22px) saturate(1.15);
+    border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+    border-radius: 18px;
+    padding: 7px 10px 9px;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 4px;
+    gap: 6px;
     z-index: 40;
+    box-shadow: 0 14px 44px rgba(0,0,0,.22);
   }
   .scrubber {
     display: flex;
@@ -659,7 +664,7 @@ html = """<!DOCTYPE html>
   }
   .mode-toggle {
     display: flex;
-    gap: 2px;
+    gap: 3px;
     font-size: 11px;
     flex-shrink: 0;
     border-bottom: none;
@@ -667,8 +672,17 @@ html = """<!DOCTYPE html>
     justify-content: center;
     padding: 2px;
     background: color-mix(in srgb, var(--surface) 70%, transparent);
-    border-radius: 8px;
-    border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+    border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  }
+  .mode-label {
+    align-self: center;
+    padding: 0 7px;
+    color: var(--text-muted);
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: .14em;
+    opacity: .72;
   }
   .mode-toggle button {
     background: transparent;
@@ -676,8 +690,8 @@ html = """<!DOCTYPE html>
     border-bottom: none;
     margin-bottom: 0;
     color: var(--text-muted);
-    border-radius: 6px;
-    padding: 4px 10px 5px;
+    border-radius: 9px;
+    padding: 5px 11px 6px;
     cursor: pointer;
     transition: color 0.15s, background 0.15s;
   }
@@ -694,7 +708,19 @@ html = """<!DOCTYPE html>
     color: #7dba95;
     background: color-mix(in srgb, #7dba95 16%, transparent);
   }
-  .tajweed-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .tajweed-btn:disabled { opacity: 0.34; cursor: not-allowed; }
+  .settings-action {
+    width: 100%;
+    margin-top: 3px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-muted);
+    background: transparent;
+    cursor: pointer;
+  }
+  .settings-action:hover { color: var(--accent); border-color: var(--frame); }
+  .script-row select { font-weight: 600; }
   .credit {
     color: var(--text-muted);
     font-size: 11px;
@@ -1129,6 +1155,13 @@ html = """<!DOCTYPE html>
       <label for="fontSelect">Font</label>
       <select id="fontSelect" title="Unicode text font for Letter/Word modes"></select>
     </div>
+    <div class="chrome-more-row script-row">
+      <label for="scriptSelect">Arabic text</label>
+      <select id="scriptSelect" title="Fully vocalized Uthmani or Quran Foundation Uthmani Simple">
+        <option value="uthmani">Uthmani · with a‘rāb</option>
+        <option value="uthmani-simple">Uthmani Simple · no a‘rāb</option>
+      </select>
+    </div>
     <div class="chrome-more-row">
       <label for="pageViewSelect">Pages</label>
       <select id="pageViewSelect" title="Browse one mushaf page at a time, or scroll the whole reading">
@@ -1148,6 +1181,7 @@ html = """<!DOCTYPE html>
       <label title="Show root/lemma tip on hover"><input type="checkbox" id="grammarHoverToggle"> Hover grammar</label>
       <label title="Open grammar panel on word click (click still seeks audio)"><input type="checkbox" id="grammarClickToggle"> Click grammar</label>
     </div>
+    <button type="button" id="modeBrowse" class="settings-action">Browse timed letters</button>
   </div>
 </div>
 <div class="load-status" id="loadStatus"></div>
@@ -1197,12 +1231,12 @@ html = """<!DOCTYPE html>
     <input type="range" id="seek" min="0" max="1000" value="0">
     <span class="time" id="totTime">0:00</span>
   </div>
-  <div class="mode-toggle">
-    <button id="modeLetter" class="on">Letter</button>
-    <button id="modeWord">Word</button>
-    <button id="modeMushaf">Mushaf</button>
-    <button id="tajweedToggle" class="tajweed-btn" disabled title="Colored tajweed rules, Mushaf mode only">Tajweed</button>
-    <button id="modeBrowse">Browse letters</button>
+  <div class="mode-toggle" aria-label="Follow highlighting">
+    <span class="mode-label">FOLLOW</span>
+    <button id="modeLetter" class="on" title="Highlight the current letter">Letters</button>
+    <button id="modeWord" title="Highlight the current word">Words</button>
+    <button id="modeMushaf" title="Use the selected Mushaf layout">Mushaf</button>
+    <button id="tajweedToggle" class="tajweed-btn" disabled title="Colored tajweed rules in vocalized Mushaf mode">Tajweed</button>
   </div>
 </div>
 
@@ -1609,6 +1643,8 @@ function textFontIsNastaleeq() {
 
 let mode = 'letter'; // 'letter' | 'word' | 'mushaf'
 document.body.classList.add('follow-mode-' + mode);
+let textScript = localStorage.getItem('quran-text-script') || 'uthmani';
+if (!['uthmani', 'uthmani-simple'].includes(textScript)) textScript = 'uthmani';
 let tajweedOn = false; // Mushaf-mode-only: colored tajweed rules via QCF V4
 let currentVerseIdx = 0;
 let userSeeking = false;
@@ -1624,6 +1660,8 @@ const surahSelect = document.getElementById('surahSelect');
 const juzSelect = document.getElementById('juzSelect');
 const browseModeSelect = document.getElementById('browseModeSelect');
 const reciterSelect = document.getElementById('reciterSelect');
+const scriptSelect = document.getElementById('scriptSelect');
+if (scriptSelect) scriptSelect.value = textScript;
 const loadStatusEl = document.getElementById('loadStatus');
 const infoAvatar = document.getElementById('infoAvatar');
 const infoName = document.getElementById('infoName');
@@ -2097,8 +2135,67 @@ function isMarkOnly(text) {
 // Letter/Word spans these read as "unknown circle" glyphs even when the
 // font shapes them. Mushaf/QCF word glyphs still show the orthographic mark.
 const HIDDEN_ORTHO_MARKS_RE = /[\u06DF\u06E0\u06EB]/g;
+const ARABIC_RECITATION_MARKS_RE = /[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]/g;
+function stripArabicRecitationMarks(text) {
+  return String(text || '').replace(ARABIC_RECITATION_MARKS_RE, '').replace(/\u0640/g, '');
+}
 function displayLetterText(text) {
-  return text.replace(HIDDEN_ORTHO_MARKS_RE, '');
+  const clean = String(text || '').replace(HIDDEN_ORTHO_MARKS_RE, '');
+  return textScript === 'uthmani-simple' ? stripArabicRecitationMarks(clean) : clean;
+}
+
+// Quran Foundation word-level Uthmani Simple sidecar. QUSX stays authoritative
+// for identity, page/line layout and timing; this changes display text only.
+const SIMPLE_WORDS = {};
+const SIMPLE_WORD_LOADS = {};
+function simpleWordKey(v, wIdx) { return v.surah + ':' + v.ayah + ':' + wIdx; }
+function visualWordText(v, wIdx, fallback) {
+  if (textScript !== 'uthmani-simple') return fallback || '';
+  return (SIMPLE_WORDS[v.surah] || {})[simpleWordKey(v, wIdx)]
+    || stripArabicRecitationMarks(fallback || '');
+}
+async function ensureUthmaniSimple(surah) {
+  if (SIMPLE_WORDS[surah]) return SIMPLE_WORDS[surah];
+  if (SIMPLE_WORD_LOADS[surah]) return SIMPLE_WORD_LOADS[surah];
+  SIMPLE_WORD_LOADS[surah] = (async () => {
+    const out = {};
+    let page = 1, totalPages = 1;
+    do {
+      const url = 'https://api.quran.com/api/v4/verses/by_chapter/' + surah
+        + '?words=true&word_fields=text_uthmani_simple,text_uthmani'
+        + '&fields=text_uthmani_simple&per_page=50&page=' + page;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Uthmani Simple request failed: ' + res.status);
+      const data = await res.json();
+      for (const verse of (data.verses || [])) {
+        for (const word of (verse.words || [])) {
+          if (word.char_type_name && word.char_type_name !== 'word') continue;
+          const pos = Number(word.position);
+          if (!pos) continue;
+          const value = word.text_uthmani_simple
+            || (word.text_uthmani ? stripArabicRecitationMarks(word.text_uthmani) : '');
+          if (value) out[verse.verse_key + ':' + pos] = value;
+        }
+      }
+      totalPages = Number(data.pagination && data.pagination.total_pages) || 1;
+      page++;
+    } while (page <= totalPages);
+    SIMPLE_WORDS[surah] = out;
+    return out;
+  })().catch((err) => {
+    console.warn(err);
+    SIMPLE_WORDS[surah] = {};
+    return SIMPLE_WORDS[surah];
+  });
+  return SIMPLE_WORD_LOADS[surah];
+}
+function hydrateSimpleTextForVisibleVerses() {
+  if (textScript !== 'uthmani-simple' || !VERSES.length) return;
+  const missing = [...new Set(VERSES.map(v => v.surah))].filter(s => !SIMPLE_WORDS[s]);
+  if (!missing.length) return;
+  Promise.all(missing.map(ensureUthmaniSimple)).then(() => {
+    if (textScript === 'uthmani-simple') renderMushafPages();
+  });
 }
 function buildClusters(text) {
   const clusters = [];
@@ -2160,7 +2257,7 @@ function buildTimedWordSpan(v, wIdx, verseIdx) {
     wordSpan.dataset.word = wIdx;
     wordSpan.dataset.ayah = v.ayah;
     wordSpan.dataset.surah = v.surah;
-    wordSpan.textContent = qusxWords[wIdx - 1] || '';
+    wordSpan.textContent = visualWordText(v, wIdx, qusxWords[wIdx - 1] || '');
     wordSpan.dataset.startMs = absStart;
     wordSpan.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -2173,7 +2270,7 @@ function buildTimedWordSpan(v, wIdx, verseIdx) {
   // Always paint ONE visual word from QUSX text. Letter timestamps sometimes
   // contain the same word twice in one contiguous word_idx run when the
   // reciter repeats it — using letters.char naively then shows قالقال etc.
-  const wordClusters = buildClusters(qusxWords[wIdx - 1] || '');
+  const wordClusters = buildClusters(visualWordText(v, wIdx, qusxWords[wIdx - 1] || ''));
   const nClusters = wordClusters.length;
   if (!nClusters) return null;
 
@@ -2363,7 +2460,7 @@ function buildMushafPlainSpan(v, wIdx, wordText, wordStart, verseIdx) {
   gSpan.dataset.word = wIdx;
   gSpan.dataset.ayah = v.ayah;
   gSpan.dataset.surah = v.surah;
-  gSpan.textContent = wordText;
+  gSpan.textContent = visualWordText(v, wIdx, wordText);
   if (wordStart != null) {
     gSpan.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -2378,8 +2475,9 @@ function renderMushafPages() {
   if (!VERSES.length) return;
   // Letter/Word: same continuous page/line shell as Mushaf, but Uthmani
   // letter spans so phoneme highlighting still works. Mushaf: QCF glyphs.
-  const withLetters = mode !== 'mushaf';
+  const withLetters = mode !== 'mushaf' || textScript === 'uthmani-simple';
   if (withLetters) flatLetters = [];
+  hydrateSimpleTextForVisibleVerses();
   const sMeta = SURAH_INDEX.find(x => x.num === currentSurah);
 
   const pageGroups = [];
@@ -2453,7 +2551,7 @@ function renderMushafPages() {
             span.dataset.word = wIdx;
             span.dataset.startMs = v.source_offset_ms + s;
             span.dataset.endMs = v.source_offset_ms + e;
-            span.textContent = text || '';
+            span.textContent = textScript === 'uthmani-simple' ? stripArabicRecitationMarks(text || '') : (text || '');
             const absStart = v.source_offset_ms + s;
             span.addEventListener('click', (e2) => {
               e2.stopPropagation();
@@ -2463,7 +2561,9 @@ function renderMushafPages() {
             b.appendChild(document.createTextNode(' '));
           });
         } else {
-          b.textContent = 'بِسْمِ اللَّهِ الرَّحْمَـٰنِ الرَّحِيمِ';
+          b.textContent = textScript === 'uthmani-simple'
+            ? 'بسم الله الرحمن الرحيم'
+            : 'بِسْمِ اللَّهِ الرَّحْمَـٰنِ الرَّحِيمِ';
         }
         // Put basmalah above the flow for first page verse, else as a line break inside flow.
         if (!flow.childNodes.length && pageDiv.childNodes.length <= 1) {
@@ -3667,9 +3767,21 @@ seek.addEventListener('change', () => {
 document.getElementById('modeLetter').addEventListener('click', () => setMode('letter'));
 document.getElementById('modeWord').addEventListener('click', () => setMode('word'));
 document.getElementById('modeMushaf').addEventListener('click', () => setMode('mushaf'));
+if (scriptSelect) {
+  scriptSelect.addEventListener('change', async () => {
+    textScript = scriptSelect.value;
+    localStorage.setItem('quran-text-script', textScript);
+    if (textScript === 'uthmani-simple') {
+      tajweedOn = false;
+      await Promise.all([...new Set(VERSES.map(v => v.surah))].map(ensureUthmaniSimple));
+    }
+    renderMushafPages();
+    setMode(mode);
+  });
+}
 const tajweedBtn = document.getElementById('tajweedToggle');
 tajweedBtn.addEventListener('click', async () => {
-  if (mode !== 'mushaf' || !mushafSupportsTajweed()) return;
+  if (mode !== 'mushaf' || textScript === 'uthmani-simple' || !mushafSupportsTajweed()) return;
   const profile = layoutProfile();
   if (profile.tajweedForced) return; // V4 layout is always colored
   tajweedOn = !tajweedOn;
@@ -3692,8 +3804,10 @@ function setMode(m) {
   // Uthmani letter spans; Mushaf renders layout-native glyphs/fonts.
   versesEl.style.display = 'none';
   mushafPagesEl.style.display = 'flex';
-  tajweedBtn.disabled = m !== 'mushaf' || !mushafSupportsTajweed() || !!layoutProfile().tajweedForced;
-  fontSelect.disabled = m === 'mushaf';
+  tajweedBtn.disabled = m !== 'mushaf' || textScript === 'uthmani-simple'
+    || !mushafSupportsTajweed() || !!layoutProfile().tajweedForced;
+  if (textScript === 'uthmani-simple') tajweedBtn.classList.remove('on');
+  fontSelect.disabled = m === 'mushaf' && textScript !== 'uthmani-simple';
   // Auto font resolves differently for Letter vs Word; always re-paint when
   // leaving/entering mushaf or when Auto is selected.
   if (VERSES.length && ((prev === 'mushaf') !== (m === 'mushaf') || currentTextFont === 'auto' || prev !== m)) {
