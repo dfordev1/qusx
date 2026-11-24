@@ -1337,14 +1337,108 @@ html = """<!DOCTYPE html>
   }
   @media(max-width:400px) { #readerHeader .brand { display:none; } }
 
+
+  /* Reader v2: a distinct verse/translation view, not a reskinned printed page. */
+  :root{--reader-header:56px;--reader-nav:245px}
+  :root[data-theme="light"]{--bg:#fff;--surface:#fff;--surface-2:#f5f6f7;--border:#e6e8eb;--text:#1f2125;--text-muted:#666c75;--accent:#2ca4ab;--accent-soft:#2ca4ab12;--frame:#2ca4ab;--ink:#1f2125}
+  :root:not([data-theme="light"]){--bg:#1b1b1d;--surface:#222225;--surface-2:#2b2b2e;--border:#39393e;--text:#f2f2f3;--text-muted:#a8a8af;--accent:#69cbd0;--accent-soft:#69cbd019}
+  body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;padding-top:var(--reader-header);padding-bottom:116px}
+  #readerHeader{height:var(--reader-header);justify-content:flex-start;gap:12px;padding:0 16px}
+  #readerHeader .brand{margin-right:auto;align-items:flex-start}
+  #readerHeader .brand-ar{font:650 19px/1.2 system-ui,sans-serif;color:var(--text)}
+  #readerHeader .brand-en{font-size:9px;letter-spacing:.08em}
+  .reader-nav-toggle{border:0;min-width:32px;padding:5px 7px}
+  #readerHeader .surah-picker{width:min(450px,56%);flex-shrink:1}
+  #readerHeader .chrome-primary{justify-content:flex-end}
+  #readerHeader .chrome-primary #surahSelect,#readerHeader .chrome-primary #juzSelect{flex:0 1 240px;text-align:left}
+  #readerHeader .chrome-more{position:fixed;top:var(--reader-header);right:0;bottom:0;width:min(380px,100vw);max-height:none;margin:0;border-radius:0;padding:18px;z-index:70;box-shadow:-8px 0 24px #0002}
+  .reader-settings-heading{font:650 19px system-ui,sans-serif;margin:0 0 8px;color:var(--text)}
+  #readerSidebar{padding:16px 12px 120px;font-size:13px;overscroll-behavior:contain}
+  #readerSidebar h2{font-size:14px;margin:0 4px 12px}
+  .reader-nav-tabs{gap:4px}
+  .reader-nav-tabs button{font-size:12px;padding:7px 4px}
+  #readerSearch{padding:9px;font-size:13px}
+  #readerNavList{gap:1px}
+  #readerNavList button{padding:7px 6px;min-height:41px;gap:7px}
+  .reader-nav-num{flex-basis:23px;font-size:11px}
+  .reader-nav-ar{font-size:17px}
+  #readerModeBar{position:sticky;top:var(--reader-header);z-index:29;direction:ltr;display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;max-width:1000px;padding:10px 4px;background:var(--bg);border-bottom:1px solid var(--border)}
+  .reader-mode-switch{display:flex;background:var(--surface-2);border-radius:7px;padding:3px;gap:2px;flex-shrink:0}
+  .reader-mode-switch button{border:0;border-radius:5px;background:transparent;color:var(--text-muted);padding:7px 13px;font:550 13px system-ui,sans-serif;cursor:pointer}
+  .reader-mode-switch button[aria-pressed="true"]{background:var(--surface);color:var(--text);box-shadow:0 1px 4px #0001}
+  .reader-mode-tools{display:flex;align-items:center;gap:6px}
+  .reader-mode-tools button,.reader-mode-tools select{border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--text);font:12px system-ui,sans-serif;padding:7px 9px;cursor:pointer}
+  .reader-mode-tools button[aria-pressed="true"]{color:var(--accent);background:var(--accent-soft)}
+  #readerHeading{max-width:1000px;padding:26px 0 12px;margin-bottom:0;border:0}
+  #readerHeading h1{font-size:24px;font-weight:650;letter-spacing:-.4px}
+  #readerHeading .reader-ar-title{font-size:30px;line-height:1.5}
+  #readerHeading p{margin:4px 0 14px}
+  #readerHeading .reader-actions{gap:6px}
+  #readerHeading .reader-action{font-size:12px;padding:7px 10px}
+  #readerMeanings{display:none}
+  #readerNotice:empty{display:none}
+  body.reader-translation .mushaf-pages{max-width:1000px;gap:0;display:flex}
+  body.reader-translation .page-nav{display:none!important}
+  body.reader-translation .mushaf-pages .bismillah{color:var(--text);font-size:32px;margin:8px 0 10px;border:0;padding:12px 0}
+  .qv{width:100%;display:grid;grid-template-columns:66px minmax(0,1fr);gap:24px;border-top:1px solid var(--border);padding:32px 8px;direction:ltr;scroll-margin-top:120px}
+  .qv-actions{display:flex;flex-direction:column;align-items:center;gap:9px;color:var(--text-muted)}
+  .qv-ref{font:600 13px system-ui,sans-serif;color:var(--text);padding:4px 0 9px}
+  .qv-action{border:0;background:transparent;color:var(--text-muted);width:34px;height:34px;border-radius:7px;display:grid;place-items:center;font:18px system-ui,sans-serif;cursor:pointer}
+  .qv-action:hover,.qv-action[aria-pressed="true"]{color:var(--accent);background:var(--accent-soft)}
+  .qv-content{min-width:0}
+  .qv-arabic{font-family:'Scheherazade New','Traditional Arabic',serif;font-size:var(--reader-size);line-height:1.95;color:var(--text);direction:rtl;text-align:right;font-weight:400;margin:0 0 20px;overflow-wrap:anywhere}
+  .qv-arabic .word{display:inline-block;color:inherit;max-width:100%;vertical-align:baseline}
+  .qv-arabic .word.active-word{color:var(--accent);background:var(--accent-soft)}
+  .qv-arabic .ayah-pin{color:var(--accent);background:transparent;box-shadow:none;border-color:var(--accent)}
+  .qv-translation{font:17px/1.75 system-ui,sans-serif;color:var(--text);text-align:left;margin:0 0 8px;white-space:pre-wrap}
+  .qv-credit{font:12px/1.5 system-ui,sans-serif;color:var(--text-muted);display:block}
+  .qv-retry{border:0;background:none;color:var(--accent);font:13px system-ui,sans-serif;cursor:pointer;text-decoration:underline;padding:0}
+  .qv-gloss{display:inline-flex;flex-direction:column;align-items:center;vertical-align:top;max-width:100%;margin:0 3px 10px}
+  .qv-gloss button{font:12px/1.5 system-ui,sans-serif;color:var(--text-muted);background:none;border:0;max-width:160px;padding:4px 6px;white-space:normal;direction:ltr;cursor:pointer}
+  .qv-gloss button:hover,.qv-gloss button[aria-pressed="true"]{color:var(--accent);background:var(--accent-soft);border-radius:5px}
+  .qv-gloss button:disabled{cursor:default}
+  body:not(.reader-translation) .mushaf-page{background:var(--surface);color:var(--text);--page-ink:var(--text);border:0;border-radius:0;box-shadow:none;padding:22px 10px}
+  body:not(.reader-translation) .mushaf-page-header{color:var(--text-muted);border-color:var(--border)}
+  body:not(.reader-translation) .mushaf-page .bismillah{border-color:var(--border)}
+  .controls{direction:ltr;padding:7px 18px 9px;min-height:65px}
+  .controls-row{max-width:1100px!important;gap:12px}
+  .controls .scrubber{display:none}
+  .controls .info-bar{min-width:0;flex:0 1 190px;direction:ltr}
+  .controls .info-text{text-align:left;min-width:0}
+  .controls .info-name,.controls .info-meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .controls #seek{flex:1;min-width:60px;accent-color:var(--accent)}
+  .controls .play-btn{background:var(--accent);color:white;box-shadow:none}
+  .reader-mode-tools .experience-toggle{display:flex;gap:3px;direction:ltr;margin:0}
+  .reader-mode-tools .experience-toggle button{font-size:12px;white-space:nowrap}
+  .reader-mode-tools .experience-toggle button.on{background:var(--accent-soft);color:var(--accent)}
+  body.reader-translation .reader-reading-only{display:none}
+  @media(min-width:900px){body.reader-nav-open{padding-left:calc(var(--reader-nav) + 26px);padding-right:26px}}
+  @media(max-width:899px){
+    #readerHeader .surah-picker{width:auto;flex:1;min-width:0}
+    #readerHeader .brand-ar{font-size:17px}
+    #readerModeBar{padding:7px 0}
+    .reader-mode-switch button{padding:7px 9px;font-size:12px}
+    .reader-mode-tools{gap:3px}
+    .reader-mode-tools button,.reader-mode-tools select{padding:6px;font-size:11px}
+    .reader-mode-tools .experience-toggle{display:none}
+    .qv{grid-template-columns:1fr;gap:8px;padding:19px 3px}
+    .qv-actions{flex-direction:row;justify-content:flex-start}
+    .qv-ref{margin-right:auto;padding:0}
+    .qv-arabic{margin-bottom:15px;font-size:var(--reader-size)}
+    .qv-translation{font-size:16px}
+    .controls{padding:6px 9px}
+    .controls-row{gap:6px}
+  }
+  @media(max-width:420px){#readerHeader .brand{display:none}.controls .info-bar{display:none}.reader-mode-tools select{max-width:80px}}
+
 </style>
 </head>
 <body>
 
 <div id="readerHeader"><button type="button" class="reader-nav-toggle" id="readerNavToggle" aria-label="Toggle navigation" aria-controls="readerSidebar" aria-expanded="false">☰</button>
 <div class="brand">
-  <span class="brand-ar" lang="ar">القرآن الكريم</span>
-  <span class="brand-en">Follow Along</span>
+  <span class="brand-ar" lang="en">QUSX</span>
+  <span class="brand-en">Quran Reader</span>
 </div>
 <div class="surah-picker">
   <div class="chrome-primary">
@@ -1354,10 +1448,10 @@ html = """<!DOCTYPE html>
     </select>
     <select id="surahSelect" aria-label="Surah"></select>
     <select id="juzSelect" style="display:none" title="Juz" aria-label="Juz"></select>
-    <button type="button" class="chrome-icon-btn chrome-more-btn" id="chromeMoreBtn" title="More options" aria-label="More options" aria-expanded="false" aria-controls="chromeMore">&#8943;</button>
+    <button type="button" class="chrome-icon-btn chrome-more-btn" id="chromeMoreBtn" title="Reader settings" aria-label="Reader settings" aria-expanded="false" aria-controls="chromeMore">&#8943;</button>
     <button type="button" class="chrome-icon-btn theme-toggle" id="themeToggle" title="Toggle light/dark" aria-label="Toggle light/dark theme">&#9789;</button>
   </div>
-  <div class="chrome-more" id="chromeMore" hidden>
+  <div class="chrome-more" id="chromeMore" hidden><h2 class="reader-settings-heading">Reading settings</h2>
     <div class="chrome-more-row">
       <label for="reciterSelect">Reciter</label>
       <select id="reciterSelect"></select>
@@ -1437,6 +1531,11 @@ html = """<!DOCTYPE html>
   <input type="search" id="readerSearch" placeholder="Search surah" aria-label="Search navigation">
   <nav id="readerNavList" aria-label="Reader locations"></nav>
 </aside>
+<div id="readerModeBar"><div class="reader-mode-switch" role="group" aria-label="Reading view"><button type="button" id="readerTranslationMode" aria-pressed="true">Translation</button><button type="button" id="readerReadingMode" aria-pressed="false">Reading</button></div><div class="reader-mode-tools"><button type="button" id="readerGlossToggle" aria-pressed="false">Word meanings</button><select id="readerGlossLanguage" aria-label="Spoken meaning language" hidden><option value="en">English</option><option value="hi">Hindi</option></select><button type="button" id="readerQuickSettings" aria-label="Reader settings">⚙</button><div class="mode-toggle experience-toggle" aria-label="Reading experience">
+    <button id="experienceRead" class="on" title="Uninterrupted Quran reading">Read</button>
+    <button id="experienceFollow" title="Follow the recitation">Follow</button>
+    <button id="experienceExplore" title="Tap and study individual words">Explore</button>
+  </div></div></div>
 <section id="readerHeading" aria-label="Current reading">
   <div class="reader-ar-title" id="readerArabicName" lang="ar" dir="rtl"></div>
   <h1 id="readerChapterName">The Quran</h1><p id="readerChapterMeta">Read, listen and explore</p>
@@ -1498,11 +1597,7 @@ html = """<!DOCTYPE html>
     <input type="range" id="seek" min="0" max="1000" value="0">
     <span class="time" id="totTime">0:00</span>
   </div>
-  <div class="mode-toggle experience-toggle" aria-label="Reading experience">
-    <button id="experienceRead" class="on" title="Uninterrupted Quran reading">Read</button>
-    <button id="experienceFollow" title="Follow the recitation">Follow</button>
-    <button id="experienceExplore" title="Tap and study individual words">Explore</button>
-  </div>
+  
   <div class="legacy-mode-controls" aria-hidden="true">
     <button id="modeLetter">Letters</button>
     <button id="modeWord">Words</button>
@@ -1963,6 +2058,8 @@ function textFontIsNastaleeq() {
 }
 
 let mode = 'letter'; // internal renderer: 'letter' | 'word' | 'mushaf'
+let readerPresentation=localStorage.getItem('qusx-presentation-v2')==='reading'?'reading':'translation';
+let readerGlossEnabled=false, readerGlossLanguage='en';
 let experience = localStorage.getItem('quran-experience') || 'read';
 if (!['read', 'follow', 'explore'].includes(experience)) experience = 'read';
 let readingStyle = localStorage.getItem('quran-reading-style') || 'authentic';
@@ -2133,6 +2230,7 @@ function verseDomScope(v) {
 }
 
 function applyPageViewMode() {
+  if(readerPresentation==='translation'){mushafPagesEl.classList.remove('page-mode');pageNavEl?.classList.remove('visible');return;}
   if (!mushafPagesEl) return;
   mushafPagesEl.classList.toggle('page-mode', pageViewMode === 'page');
   if (pageNavEl) pageNavEl.classList.toggle('visible', pageViewMode === 'page' && mushafPageCount > 0);
@@ -2248,6 +2346,7 @@ function pageIndexForVerse(idx) {
 }
 
 function syncPageToVerse(idx) {
+  if(readerPresentation==='translation')return;
   if (pageViewMode !== 'page') return;
   const pi = pageIndexForVerse(idx);
   if (pi !== currentPageIdx) showMushafPage(pi);
@@ -2851,6 +2950,8 @@ function buildMushafPlainSpan(v, wIdx, wordText, wordStart, verseIdx) {
 }
 
 function renderMushafPages() {
+  if(readerPresentation==='translation'){renderVerseReader();return;}
+  readerStopGloss();
   mushafPagesEl.innerHTML = '';
   if (!VERSES.length) return;
   // Letter/Word: same continuous page/line shell as Mushaf, but Uthmani
@@ -3102,6 +3203,7 @@ function refreshInfoBar(idx) {
   if (place) text += ' · ' + place;
   infoMeta.textContent = text;
   readerSync(idx);
+  readerUpdatePlayButtons();
 }
 
 // The HF datasets-server /rows endpoint caps `length` at 100 — many surahs
@@ -3802,6 +3904,8 @@ function scrollToPlayback(idx, force) {
   const v = VERSES[idx];
   if (!v) return;
   syncPageToVerse(idx);
+  if(readerPresentation==='translation' && audio.paused && !force)return;
+  if(readerPresentation==='translation' && force && idx===0 && audio.paused){window.scrollTo({top:0,behavior:'auto'});return;}
   if (!force && followScrollMode === 'off') return;
   const scope = verseDomScope(v);
   const activeW = activeWordAtMs(v, audio.currentTime * 1000);
@@ -4420,7 +4524,7 @@ seek.addEventListener('click', () => { if (browsing) exitBrowse(); });
     if(readerBusy)return;
     readerBusy=true;readerNav();readerUI('readerNotice').textContent='';
     try {
-      audio.pause();
+      readerStopGloss();audio.pause();
       if(tab==='juz'){await loadJuz(+key,{keepPlaying:false});}
       else {
         const [sn,an]=String(key).split(':').map(Number);
@@ -4468,6 +4572,169 @@ seek.addEventListener('click', () => { if (browsing) exitBrowse(); });
   readerObserver.observe(surahSelect,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled']});
   readerObserver.observe(juzSelect,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled']});
   reciterSelect.addEventListener('change',()=>readerNav());
+
+
+  // Separate translation renderer using QUSX's canonical text and timing.
+  function readerEl(tag,cls,content){
+    const e=document.createElement(tag);if(cls)e.className=cls;
+    if(content!=null)e.textContent=content;return e;
+  }
+  function readerVerseKey(v){return v.surah+':'+v.ayah;}
+  function readerIconButton(icon,label,handler){
+    const b=readerEl('button','qv-action',icon);b.type='button';b.title=label;b.setAttribute('aria-label',label);b.onclick=handler;return b;
+  }
+  function readerSetSaved(v,btn){
+    const key=readerVerseKey(v);
+    readerBookmarks=readerBookmarks.includes(key)?readerBookmarks.filter(x=>x!==key):[...readerBookmarks,key];
+    try{localStorage.setItem('qusx-reader-bookmarks',JSON.stringify(readerBookmarks));}catch(_){}
+    readerRefreshVerseActions();readerLastLocation='';readerSync(currentVerseIdx);readerNav();
+  }
+  function readerRefreshVerseActions(){
+    for(const b of document.querySelectorAll('.qv-save')){
+      const saved=readerBookmarks.includes(b.dataset.key);b.textContent=saved?'★':'☆';
+      b.setAttribute('aria-pressed',String(saved));
+    }
+  }
+  async function readerCopyVerse(v,btn){
+    const url=new URL(location.href);url.hash=readerVerseKey(v);
+    try{await navigator.clipboard.writeText(url.href);btn.title='Copied';readerUI('readerNotice').textContent='Verse link copied.';}
+    catch(_){history.replaceState(null,'',url);readerUI('readerNotice').textContent='Verse link is in the address bar.';}
+  }
+  const readerTranslations=new Map();
+  function readerGetTranslation(sn){
+    if(readerTranslations.has(sn))return readerTranslations.get(sn);
+    const task=fetch('https://api.alquran.cloud/v1/surah/'+sn+'/en.pickthall')
+      .then(r=>{if(!r.ok)throw Error('Translation unavailable');return r.json();})
+      .then(j=>{
+        if(j.data?.number!==sn||!Array.isArray(j.data.ayahs)||j.data.edition?.identifier!=='en.pickthall')throw Error('Unexpected translation response');
+        return new Map(j.data.ayahs.filter(a=>Number.isInteger(a.numberInSurah)&&typeof a.text==='string').map(a=>[a.numberInSurah,a.text]));
+      }).catch(e=>{readerTranslations.delete(sn);throw e;});
+    readerTranslations.set(sn,task);return task;
+  }
+  function readerFillTranslation(v,el,credit){
+    el.textContent='Loading translation…';credit.textContent='';
+    readerGetTranslation(v.surah).then(map=>{
+      if(!el.isConnected)return;
+      if(!map.has(v.ayah))throw Error('Verse translation unavailable');
+      el.textContent=map.get(v.ayah);credit.textContent='— Marmaduke Pickthall · Al Quran Cloud';
+    }).catch(()=>{
+      if(!el.isConnected)return;el.textContent='Translation unavailable. ';
+      const b=readerEl('button','qv-retry','Retry');b.type='button';
+      b.onclick=()=>readerFillTranslation(v,el,credit);el.append(b);
+    });
+  }
+  const readerGlossPromises=new Map();
+  function readerGetGloss(lang,sn){
+    const key=lang+':'+sn;
+    if(!readerGlossPromises.has(key)){
+      const p=fetchGlossIndex(lang,sn).then(idx=>{if(!idx)readerGlossPromises.delete(key);return idx;});
+      readerGlossPromises.set(key,p);
+    }
+    return readerGlossPromises.get(key);
+  }
+  let readerPlayingGloss=null;
+  function readerStopGloss(){
+    glossAudio.pause();
+    if(readerPlayingGloss)readerPlayingGloss.setAttribute('aria-pressed','false');
+    readerPlayingGloss=null;
+  }
+  function readerGlossWord(v,wIdx,span){
+    const wrap=readerEl('span','qv-gloss');wrap.append(span);
+    const b=readerEl('button','','…');b.type='button';b.disabled=true;b.setAttribute('aria-pressed','false');wrap.append(b);
+    const id=String(morphFor(v,wIdx)?.id||'');
+    const lang=readerGlossLanguage;
+    if(!id){b.textContent='—';return wrap;}
+    readerGetGloss(lang,v.surah).then(idx=>{
+      if(!b.isConnected)return;
+      const clip=idx?.words?.[id];
+      const owner=idx?.merged?.[id];
+      if(!clip||!idx.text?.[clip]){b.textContent='—';return;}
+      b.textContent=owner?'←':idx.text[clip];
+      b.title=owner?'Meaning shown with adjacent word':'Play synthesised meaning (not recitation)';
+      b.disabled=false;
+      b.onclick=e=>{
+        e.stopPropagation();
+        const same=readerPlayingGloss===b;readerStopGloss();if(same)return;
+        audio.pause();readerPlayingGloss=b;b.setAttribute('aria-pressed','true');
+        glossAudio.src=GLOSS_BASE[lang]+'audio/'+clip+'.opus';
+        glossAudio.play().catch(()=>readerStopGloss());
+      };
+    });
+    return wrap;
+  }
+  function renderVerseReader(){
+    readerStopGloss();mushafPagesEl.replaceChildren();mushafPagesEl.classList.remove('page-mode');mushafPageCount=0;
+    if(pageNavEl)pageNavEl.classList.remove('visible');
+    flatLetters=[];hydrateSimpleTextForVisibleVerses();
+    const frag=document.createDocumentFragment();
+    for(const [i,v] of VERSES.entries()){
+      if(v.ayah===1&&v.surah!==1&&v.surah!==9){
+        const b=readerEl('div','bismillah','بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ');b.lang='ar';b.dir='rtl';frag.append(b);
+      }
+      const row=readerEl('article','qv');row.dataset.verseKey=readerVerseKey(v);
+      const actions=readerEl('div','qv-actions');actions.append(readerEl('span','qv-ref',readerVerseKey(v)));
+      const play=readerIconButton('▶','Play verse '+readerVerseKey(v),()=>{
+        readerStopGloss();
+        if(currentVerseIdx===i&&!audio.paused){audio.pause();return;}
+        seekVerseStart(i,true);
+      });
+      play.classList.add('qv-play');play.dataset.idx=i;actions.append(play);
+      const save=readerIconButton('☆','Save verse '+readerVerseKey(v),()=>readerSetSaved(v,save));
+      save.classList.add('qv-save');save.dataset.key=readerVerseKey(v);actions.append(save);
+      actions.append(readerIconButton('↗','Copy verse link '+readerVerseKey(v),e=>readerCopyVerse(v,e.currentTarget)));
+      if(v.sajda)actions.append(readerEl('small','', '۩ Sajda'));
+      const content=readerEl('div','qv-content');
+      const ar=readerEl('div','qv-arabic verse-text');ar.lang='ar';ar.dir='rtl';
+      for(let wi=1;wi<=(v.qusxWords||[]).length;wi++){
+        let word=v.letters?.word_idx?buildTimedWordSpan(v,wi,i):null;
+        if(!word){word=readerEl('span','word',visualWordText(v,wi,v.qusxWords[wi-1]));word.dataset.word=wi;word.dataset.surah=v.surah;word.dataset.ayah=v.ayah;}
+        ar.append(readerGlossEnabled?readerGlossWord(v,wi,word):word,document.createTextNode(' '));
+      }
+      if(!(v.qusxWords||[]).length)ar.append(document.createTextNode(v.text||''));
+      ar.append(readerEl('span','ayah-pin',toArabicDigits(v.ayah)));
+      const tr=readerEl('p','qv-translation','Loading translation…');tr.lang='en';tr.dir='ltr';
+      const credit=readerEl('small','qv-credit');
+      content.append(ar,tr,credit);row.append(actions,content);frag.append(row);
+      readerFillTranslation(v,tr,credit);
+    }
+    mushafPagesEl.append(frag);readerRefreshVerseActions();readerUpdatePlayButtons();
+  }
+  function readerUpdatePlayButtons(){
+    for(const b of document.querySelectorAll('.qv-play')){
+      const playing=Number(b.dataset.idx)===currentVerseIdx&&!audio.paused;b.textContent=playing?'Ⅱ':'▶';
+      b.setAttribute('aria-pressed',String(playing));
+    }
+  }
+  function readerSwitchPresentation(value){
+    readerPresentation=value==='reading'?'reading':'translation';
+    try{localStorage.setItem('qusx-presentation-v2',readerPresentation);}catch(_){}
+    document.body.classList.toggle('reader-translation',readerPresentation==='translation');
+    readerUI('readerTranslationMode').setAttribute('aria-pressed',String(readerPresentation==='translation'));
+    readerUI('readerReadingMode').setAttribute('aria-pressed',String(readerPresentation==='reading'));
+    readerUI('readerGlossToggle').hidden=readerPresentation!=='translation';
+    readerUI('readerGlossLanguage').hidden=readerPresentation!=='translation'||!readerGlossEnabled;
+    renderMushafPages();updateHighlight();
+    if(VERSES[currentVerseIdx])scrollToPlayback(currentVerseIdx,true);
+  }
+  readerUI('readerTranslationMode').onclick=()=>readerSwitchPresentation('translation');
+  readerUI('readerReadingMode').onclick=()=>readerSwitchPresentation('reading');
+  readerUI('readerQuickSettings').onclick=()=>readerUI('chromeMoreBtn').click();
+  readerUI('readerGlossToggle').onclick=()=>{
+    readerGlossEnabled=!readerGlossEnabled;readerUI('readerGlossToggle').setAttribute('aria-pressed',String(readerGlossEnabled));
+    readerUI('readerGlossLanguage').hidden=!readerGlossEnabled;renderMushafPages();updateHighlight();
+  };
+  readerUI('readerGlossLanguage').value=readerGlossLanguage;
+  readerUI('readerGlossLanguage').onchange=()=>{
+    readerGlossLanguage=readerUI('readerGlossLanguage').value;renderMushafPages();updateHighlight();
+  };
+  audio.addEventListener('play',()=>{readerStopGloss();readerUpdatePlayButtons();});
+  audio.addEventListener('pause',readerUpdatePlayButtons);
+  glossAudio.addEventListener('ended',readerStopGloss);
+  glossAudio.addEventListener('error',readerStopGloss);
+  document.body.classList.toggle('reader-translation',readerPresentation==='translation');
+  readerUI('readerTranslationMode').setAttribute('aria-pressed',String(readerPresentation==='translation'));
+  readerUI('readerReadingMode').setAttribute('aria-pressed',String(readerPresentation==='reading'));
+  readerUI('readerGlossToggle').hidden=readerPresentation!=='translation';
 
 // init — probe optional Al-Hadr pack, resume last read when possible
 (async () => {
