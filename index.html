@@ -1733,6 +1733,7 @@ function readerAudioMatches(url){
 }
 function cancelPendingAudioSeek(){
   audioSeekToken++;
+  if(pendingAudioSeek?.cleanup)pendingAudioSeek.cleanup();
   pendingAudioSeek=null;
 }
 
@@ -1938,33 +1939,61 @@ function handleWordTap(v, wIdx, verseIdx, absStart) {
   tapFrameId = requestAnimationFrame(watchFrame);
 }
 
-function seekToWordMs(absMs, verseIdx, autoplay) {
+function seekToWordMs(absMs,verseIdx,autoplay){
   const v=VERSES[verseIdx];if(!v||!Number.isFinite(absMs))return;
-  if(!v.audio){cancelPendingAudioSeek();audio.pause();currentAudioKey=null;currentVerseIdx=verseIdx;clearHighlights();refreshScrubber(verseIdx);refreshInfoBar(verseIdx);scrollToPlayback(verseIdx,true);loadStatusEl.textContent='No aligned audio for '+v.surah+':'+v.ayah+' in this reciter.';loadStatusEl.classList.add('error');return;}
-  const token=++audioSeekToken;
-  const request={token,verse:v,idx:verseIdx,ms:absMs,autoplay:!!autoplay};
+  cancelPendingAudioSeek();
+  if(!v.audio){audio.pause();currentAudioKey=null;currentVerseIdx=verseIdx;clearHighlights();refreshScrubber(verseIdx);refreshInfoBar(verseIdx);scrollToPlayback(verseIdx,true);loadStatusEl.textContent='No aligned audio for '+v.surah+':'+v.ayah+' in this reciter.';loadStatusEl.classList.add('error');return;}
+  const token=audioSeekToken,request={token,verse:v,idx:verseIdx,ms:absMs,autoplay:!!autoplay};
   pendingAudioSeek=request;
   currentVerseIdx=verseIdx;lastScrollKey='';clearHighlights();
   refreshScrubber(verseIdx);refreshInfoBar(verseIdx);syncPageToVerse(verseIdx);
   const ready=audioIsReadyFor(v.audio);
-  const apply=()=>{
-    if(pendingAudioSeek!==request||token!==audioSeekToken||VERSES[verseIdx]!==v||!readerAudioMatches(v.audio))return;
-    currentVerseIdx=verseIdx;
-    try{audio.currentTime=absMs/1000;}catch(e){pendingAudioSeek=null;loadStatusEl.textContent='Could not seek audio: '+e.message;loadStatusEl.classList.add('error');return;}
-    pendingAudioSeek=null;
+  audio.pause();
+  const current=()=>pendingAudioSeek===request&&audioSeekToken===token&&VERSES[verseIdx]===v;
+  const cleanup=()=>{
+    clearTimeout(timer);audio.removeEventListener('loadedmetadata',apply);
+    audio.removeEventListener('seeked',verify);audio.removeEventListener('canplay',verify);
+  };
+  request.cleanup=cleanup;
+  const fail=message=>{
+    if(!current())return;
+    cleanup();pendingAudioSeek=null;audio.pause();clearHighlights();
+    loadStatusEl.textContent=message;loadStatusEl.classList.add('error');
+  };
+  const verify=()=>{
+    if(!current()||!request.seekIssued||audio.seeking||!readerAudioMatches(v.audio))return;
+    if(Math.abs(audio.currentTime-absMs/1000)>.25)return;
+    cleanup();pendingAudioSeek=null;currentVerseIdx=verseIdx;
+    loadStatusEl.classList.remove('error');
     refreshScrubber(verseIdx);refreshInfoBar(verseIdx);syncPageToVerse(verseIdx);
-    scrollToPlayback(verseIdx,true);
+    scrollToPlayback(verseIdx,true);updateHighlight();
     if(request.autoplay)audio.play().catch(()=>{loadStatusEl.textContent='Tap Play to continue recitation.';});
-    if(!audio.seeking)updateHighlight();
     saveResumeState();
   };
+  const apply=()=>{
+    if(!current()||request.seekIssued||!readerAudioMatches(v.audio)||audio.readyState<1)return;
+    const duration=audio.duration;
+    if(Number.isFinite(duration)){
+      if(absMs/1000>duration+.15){fail('Audio does not contain the requested ayah. Recitation stopped.');return;}
+      if(v.clipRelative&&Math.abs(duration-v.duration_ms/1000)>Math.max(.75,v.duration_ms/1000*.03)){fail('Audio clip duration differs from its timing data. Recitation stopped.');return;}
+      if(!v.clipRelative&&isLocalReciter()){
+        const track=LOCAL_MANIFEST?.tracks?.find(t=>Number(t.juz)===Number(v.localJuz));
+        const expected=Number(track?.durationSeconds);
+        if(expected>0&&Math.abs(expected-duration)>Math.max(2,expected*.005)){fail('Al-Hadr recording duration differs from its timing manifest. Recitation stopped.');return;}
+      }
+    }
+    request.seekIssued=true;
+    try{audio.currentTime=absMs/1000;}catch(e){fail('Could not seek recitation: '+e.message);return;}
+    verify();
+  };
+  const timer=setTimeout(()=>fail('Could not confirm the audio position. Tap Play to retry.'),15000);
+  audio.addEventListener('loadedmetadata',apply);
+  audio.addEventListener('seeked',verify);
+  audio.addEventListener('canplay',verify);
   if(!ready){
     if(currentAudioKey!==v.audio)audio.dataset.audioTriedUrls='';
-    audio.pause();
     currentAudioKey=v.audio;
-    audio.addEventListener('loadedmetadata',apply,{once:true});
-    if(!readerAudioMatches(v.audio)||audio.readyState===0){audio.src=v.audio;audio.load();}
-    else if(audio.readyState>=1)apply();
+    audio.src=v.audio;audio.load();
   }else apply();
 }
 
@@ -2015,7 +2044,7 @@ function ensureAudioForVerse(idx, autoplay) {
   const v=VERSES[idx];if(!v)return;
   if(!v.audio){seekVerseStart(idx,autoplay);return;}
   if(pendingAudioSeek?.verse===v){pendingAudioSeek.autoplay=!!autoplay;return;}
-  if(audioIsReadyFor(v.audio)&&currentVerseIdx===idx){
+  if(audioIsReadyFor(v.audio)&&currentVerseIdx===idx&&!loadStatusEl.classList.contains('error')){
     if(autoplay&&audio.paused)audio.play().catch(()=>{loadStatusEl.textContent='Tap Play to continue recitation.';});
     return;
   }
@@ -3429,6 +3458,7 @@ function normalizeArabicLocal(s) {
   return s
     .normalize('NFD')
     .replace(/[ً-ٰٟۖ-ۭؐ-ؚ]/g, '')
+    .replace(/ـ/g, '') // tatweel is typography, not a recited letter
     .replace(/[ٱأإآ]/g, 'ا')
     .replace(/ة/g, 'ه')
     .replace(/ى/g, 'ي')
@@ -4180,7 +4210,7 @@ function verseAtMs(ms){
 }
 
 function updateHighlight() {
-  if(readerLoading||pendingAudioSeek||audio.seeking||!currentAudioKey||!readerAudioMatches(currentAudioKey))return;
+  if(readerLoading||pendingAudioSeek||audio.seeking||!currentAudioKey||!readerAudioMatches(currentAudioKey)||loadStatusEl.classList.contains('error'))return;
   const ms=audio.currentTime*1000;
   const idx=readerVerseAtTime(VERSES,currentAudioKey,ms,currentVerseIdx);
   if(idx<0){clearHighlights();return;}
@@ -4318,8 +4348,16 @@ scheduleChromeConceal();
 seek.addEventListener('mousedown', () => userSeeking = true);
 seek.addEventListener('touchstart', () => userSeeking = true);
 seek.addEventListener('change', () => {
-  if (audio.duration) audio.currentTime = (seek.value / 1000) * audio.duration;
-  userSeeking = false;
+  userSeeking=false;
+  if(!audio.duration||!currentAudioKey)return;
+  const ms=Number(seek.value)/1000*audio.duration*1000;
+  const candidates=VERSES.map((v,idx)=>({v,idx})).filter(x=>x.v.audio===currentAudioKey);
+  if(!candidates.length)return;
+  const start=Math.min(...candidates.map(x=>Number(x.v.source_offset_ms)));
+  const end=Math.max(...candidates.map(x=>Number(x.v.source_offset_ms)+Number(x.v.duration_ms)));
+  const target=Math.max(start,Math.min(end-1,ms));
+  const idx=readerVerseAtTime(VERSES,currentAudioKey,target,currentVerseIdx);
+  if(idx>=0)seekToWordMs(target,idx,!audio.paused);
 });
 
 document.getElementById('modeLetter').addEventListener('click', () => setMode('letter'));
