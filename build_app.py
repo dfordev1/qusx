@@ -1940,6 +1940,7 @@ function seekVerseStart(idx, autoplay) {
 
 // Seek to an absolute ms position in the current (or target) verse's audio file.
 function handleWordTap(v, wIdx, verseIdx, absStart) {
+  if(readerLoading)return;
   cancelTapWordStop();
   if (!tapWordMode) {
     seekToWordMs(absStart, verseIdx, true);
@@ -1962,12 +1963,12 @@ function handleWordTap(v, wIdx, verseIdx, absStart) {
   const token = tapPlaybackToken;
 
   seekToWordMs(absStart, verseIdx, true);
-  let enteredSegment = false;
   const watchFrame = () => {
     if (token !== tapPlaybackToken) return;
+    if(pendingAudioSeek){tapFrameId=requestAnimationFrame(watchFrame);return;}
+    if(readerLoading||VERSES[verseIdx]!==v||currentVerseIdx!==verseIdx||!readerAudioMatches(v.audio)||loadStatusEl.classList.contains('error')){cancelTapWordStop();return;}
     const now = audio.currentTime * 1000;
-    if (now >= absStart - 25 && now < stopAt) enteredSegment = true;
-    if (enteredSegment && now >= stopAt) {
+    if (now >= stopAt) {
       audio.pause();
       tapFrameId = 0;
       return;
@@ -1995,7 +1996,7 @@ function seekToWordMs(absMs,verseIdx,autoplay){
   request.cleanup=cleanup;
   const fail=message=>{
     if(!current())return;
-    cleanup();pendingAudioSeek=null;audio.pause();clearHighlights();
+    cleanup();pendingAudioSeek=null;cancelTapWordStop();audio.pause();clearHighlights();
     loadStatusEl.textContent=message;loadStatusEl.classList.add('error');
   };
   const verify=()=>{
@@ -2005,7 +2006,7 @@ function seekToWordMs(absMs,verseIdx,autoplay){
     loadStatusEl.classList.remove('error');
     refreshScrubber(verseIdx);refreshInfoBar(verseIdx);syncPageToVerse(verseIdx);
     scrollToPlayback(verseIdx,true);updateHighlight();
-    if(request.autoplay)audio.play().catch(()=>{loadStatusEl.textContent='Tap Play to continue recitation.';});
+    if(request.autoplay)audio.play().catch(()=>{if(audioSeekToken!==token)return;cancelTapWordStop();loadStatusEl.textContent='Tap Play to continue recitation.';});
     saveResumeState();
   };
   const apply=()=>{
@@ -2295,6 +2296,8 @@ const infoName = document.getElementById('infoName');
 
 // Local juz 404 → Archive.org; ogg 404 → opus/mp3 (juz 22+ on IA are opus-only).
 audio.addEventListener('error', () => {
+  cancelTapWordStop();
+  if(readerLoading&&!pendingAudioSeek)return;
   if(!isLocalReciter()||!LOCAL_MANIFEST){cancelPendingAudioSeek();clearHighlights();loadStatusEl.textContent='Recitation audio unavailable. Select another reciter or retry Play.';loadStatusEl.classList.add('error');return;}
   const v = VERSES[currentVerseIdx] || VERSES[0];
   if (!v) return;
@@ -3472,7 +3475,7 @@ function readerAlignTiming(row,canonical,allowBasmalah){
     const w=mapping.map.get(id);if(!w)return empty;
     words.push([w,s,e]);
   }
-  if(!words.length)return empty;
+  if(!words.length||new Set(words.map(w=>w[0])).size!==canonical.length)return empty;
   const input=row.letter_timestamps||{},letters={word_idx:[],start_ms:[],end_ms:[]};
   for(let i=0;i<(input.word_idx||[]).length;i++){
     const w=mapping.map.get(Number(input.word_idx[i])),s=Number(input.start_ms?.[i]),e=Number(input.end_ms?.[i]);
@@ -3672,7 +3675,8 @@ function collectLocalJuzAyahs(juz) {
 async function loadJuz(juzNum, opts) {
   opts = opts || {};
   if (!isLocalReciter()) throw new Error('Juz mode requires local Al-Hadr reciter');
-  const request=++readerLoadToken;readerLoading=true;cancelPendingAudioSeek();cancelTapWordStop();
+  const wasPlaying=!audio.paused||!!pendingAudioSeek?.autoplay;
+  const request=++readerLoadToken;readerLoading=true;cancelPendingAudioSeek();cancelTapWordStop();audio.pause();
   try{await ensureLocalManifest();}catch(e){if(request===readerLoadToken)readerLoading=false;throw e;}
   if(request!==readerLoadToken)return;
   browseMode = 'juz';
@@ -3686,14 +3690,12 @@ async function loadJuz(juzNum, opts) {
   const continuePlayback = !!opts.continuePlayback;
   const prevAudioKey = currentAudioKey;
   const prevTime = audio.currentTime;
-  const keepPlaying = opts.keepPlaying != null ? !!opts.keepPlaying : (!audio.paused || continuePlayback);
+  const keepPlaying = opts.keepPlaying != null ? !!opts.keepPlaying : (wasPlaying || continuePlayback);
 
   loadStatusEl.textContent = 'Loading Juz ' + juzNum + '…';
   loadStatusEl.classList.remove('error');
-  if (!continuePlayback) {
-    audio.pause();
-    currentAudioKey = null;
-  }
+  audio.pause();
+  if (!continuePlayback) currentAudioKey = null;
   hideInspector();
 
   try {
@@ -3754,7 +3756,7 @@ async function loadJuz(juzNum, opts) {
     loadStatusEl.textContent = 'Juz ' + juzNum + ' · ' + VERSES.length + ' ayahs';
   } catch (err) {
     if(request===readerLoadToken){audio.pause();loadStatusEl.textContent = 'Could not load Juz ' + juzNum + ': ' + err.message;loadStatusEl.classList.add('error');}
-  }finally{if(request===readerLoadToken){readerLoading=false;if(!pendingAudioSeek&&!audio.seeking)updateHighlight();}}
+  }finally{if(request===readerLoadToken){readerLoading=false;if(!pendingAudioSeek&&!audio.seeking)updateHighlight();if(!loadStatusEl.classList.contains('error'))saveResumeState();}}
 }
 
 function nextLocalSurah(from) {
@@ -3818,6 +3820,7 @@ function readResumeState() {
   } catch (_) { return null; }
 }
 function saveResumeState() {
+  if(readerLoading)return;
   const v = VERSES[currentVerseIdx];
   if (!v) return;
   const state = {
@@ -3862,6 +3865,7 @@ const speedSelect = document.getElementById('speedSelect');
 // opts.continuePlayback: keep audio rolling across surah boundaries (Fatiha→Baqarah).
 async function loadSurah(num, opts) {
   opts = opts || {};
+  const wasPlaying=!audio.paused||!!pendingAudioSeek?.autoplay;
   const request=++readerLoadToken;readerLoading=true;cancelPendingAudioSeek();cancelTapWordStop();
   browseMode = 'surah';
   browseModeSelect.value = 'surah';
@@ -3871,17 +3875,15 @@ async function loadSurah(num, opts) {
   const continuePlayback = !!opts.continuePlayback;
   const prevAudioKey = currentAudioKey;
   const prevTime = audio.currentTime;
-  const keepPlaying = opts.keepPlaying != null ? !!opts.keepPlaying : (!audio.paused || continuePlayback);
+  const keepPlaying = opts.keepPlaying != null ? !!opts.keepPlaying : (wasPlaying || continuePlayback);
 
   currentSurah = num;
   surahSelect.value = String(num);
   const meta = SURAH_INDEX.find(s => s.num === num);
   loadStatusEl.textContent = 'Loading ' + meta.name + '…';
   loadStatusEl.classList.remove('error');
-  if (!continuePlayback) {
-    audio.pause();
-    currentAudioKey = null;
-  }
+  audio.pause();
+  if (!continuePlayback) currentAudioKey = null;
   hideInspector(); // the previously-inspected word's DOM node is about to be discarded by renderAll()
 
   try {
@@ -3973,7 +3975,7 @@ async function loadSurah(num, opts) {
     refreshTraditionInfo(num, meta.ayahCount);
   } catch (err) {
     if(request===readerLoadToken){audio.pause();loadStatusEl.textContent = 'Could not load ' + meta.name + ': ' + err.message;loadStatusEl.classList.add('error');}
-  }finally{if(request===readerLoadToken){readerLoading=false;if(!pendingAudioSeek&&!audio.seeking)updateHighlight();}}
+  }finally{if(request===readerLoadToken){readerLoading=false;if(!pendingAudioSeek&&!audio.seeking)updateHighlight();if(!loadStatusEl.classList.contains('error'))saveResumeState();}}
 }
 
 function localSurahEndMs(surahNum) {
@@ -4066,6 +4068,7 @@ function scrollToPlayback(idx, force) {
   // In gaps (no active word), do not scroll at all unless forced (verse jump).
   if(!force&&activeW==null&&v.alignmentVerified!==false)return;
   if(!target)return;
+  if(!force&&lastScrollKey===key)return;
   lastScrollKey=key;
 
   const scrollMode=force?'keep-up':followScrollMode;
@@ -4329,7 +4332,8 @@ audio.addEventListener('pause', () => {
   scheduleChromeConceal();
 });
 audio.addEventListener('ended',()=>{
-  updateHighlight();playBtn.innerHTML='&#9658;';saveResumeState();readerAdvancePlayback(true);
+  const singleWord=!!tapFrameId;cancelTapWordStop();
+  updateHighlight();playBtn.innerHTML='&#9658;';saveResumeState();if(!singleWord)readerAdvancePlayback(true);
 });
 audio.addEventListener('seeked',()=>{lastScrollKey='';updateHighlight();});
 audio.addEventListener('playing',()=>{lastScrollKey='';updateHighlight();});
@@ -4341,15 +4345,19 @@ document.addEventListener('visibilitychange', () => {
 });
 
 prevAyahBtn.addEventListener('click', () => {
+  if(readerLoading)return;
   revealPlaybackChrome();
   if (currentVerseIdx > 0) jumpToVerse(currentVerseIdx - 1, !audio.paused);
 });
 nextAyahBtn.addEventListener('click', () => {
+  if(readerLoading)return;
   revealPlaybackChrome();
   if (currentVerseIdx < VERSES.length - 1) jumpToVerse(currentVerseIdx + 1, !audio.paused);
 });
 
 playBtn.addEventListener('click', () => {
+  if(readerLoading)return;
+  if(pendingAudioSeek){pendingAudioSeek.autoplay=!pendingAudioSeek.autoplay;if(!pendingAudioSeek.autoplay)cancelTapWordStop();return;}
   if (audio.paused) {
     if (browsing) exitBrowse();
     if(VERSES[currentVerseIdx])ensureAudioForVerse(currentVerseIdx,true);
@@ -4387,6 +4395,8 @@ seek.addEventListener('mousedown', () => userSeeking = true);
 seek.addEventListener('touchstart', () => userSeeking = true);
 seek.addEventListener('change', () => {
   userSeeking=false;
+  if(readerLoading||pendingAudioSeek)return;
+  cancelTapWordStop();
   if(!audio.duration||!currentAudioKey)return;
   const ms=Number(seek.value)/1000*audio.duration*1000;
   const candidates=VERSES.map((v,idx)=>({v,idx})).filter(x=>x.v.audio===currentAudioKey);
@@ -4854,7 +4864,8 @@ seek.addEventListener('click', () => { if (browsing) exitBrowse(); });
       const row=readerEl('article','qv');row.dataset.verseKey=readerVerseKey(v);
       const actions=readerEl('div','qv-actions');actions.append(readerEl('span','qv-ref',readerVerseKey(v)));
       const play=readerIconButton('▶','Play verse '+readerVerseKey(v),()=>{
-        readerStopGloss();
+        if(readerLoading)return;
+        cancelTapWordStop();readerStopGloss();
         if(currentVerseIdx===i&&!audio.paused){audio.pause();return;}
         seekVerseStart(i,true);
       });
