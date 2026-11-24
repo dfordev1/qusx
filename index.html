@@ -1943,7 +1943,7 @@ function handleWordTap(v, wIdx, verseIdx, absStart) {
 function seekToWordMs(absMs,verseIdx,autoplay){
   const v=VERSES[verseIdx];if(!v||!Number.isFinite(absMs))return;
   cancelPendingAudioSeek();
-  if(!v.audio){audio.pause();currentAudioKey=null;currentVerseIdx=verseIdx;clearHighlights();refreshScrubber(verseIdx);refreshInfoBar(verseIdx);scrollToPlayback(verseIdx,true);loadStatusEl.textContent='No aligned audio for '+v.surah+':'+v.ayah+' in this reciter.';loadStatusEl.classList.add('error');return;}
+  if(!v.audio||!readerValidSpan(v.source_offset_ms,v.duration_ms)){audio.pause();currentAudioKey=null;currentVerseIdx=verseIdx;clearHighlights();refreshScrubber(verseIdx);refreshInfoBar(verseIdx);scrollToPlayback(verseIdx,true);loadStatusEl.textContent='No aligned audio for '+v.surah+':'+v.ayah+' in this reciter.';loadStatusEl.classList.add('error');return;}
   const token=audioSeekToken,request={token,verse:v,idx:verseIdx,ms:absMs,autoplay:!!autoplay};
   pendingAudioSeek=request;
   currentVerseIdx=verseIdx;lastScrollKey='';clearHighlights();
@@ -3424,15 +3424,20 @@ function readerWordMapping(canonical,recited,allowBasmalah){
   }
   return next===base.length?{map,skip,raw}:null;
 }
+function readerValidSpan(offset,duration){
+  const numeric=x=> (typeof x==='number'||(typeof x==='string'&&x.trim()!==''))&&Number.isFinite(Number(x));
+  return numeric(offset)&&numeric(duration)&&Number(offset)>=0&&Number(duration)>0&&Number.isFinite(Number(offset)+Number(duration));
+}
 function readerAlignTiming(row,canonical,allowBasmalah){
   const mapping=readerWordMapping(canonical,row.text_uthmani||row.text,allowBasmalah);
   const duration=Number(row.duration_ms),offset=Number(row.source_offset_ms);
   const empty={words:[],letters:{word_idx:[],start_ms:[],end_ms:[]},basmalahWords:null,source_offset_ms:offset,duration_ms:duration,alignmentVerified:false};
-  if(!mapping)return empty;
+  if(!readerValidSpan(row.source_offset_ms,row.duration_ms)||!mapping)return empty;
   const words=[],basmalahWords=[];
   for(const item of row.word_timestamps||[]){
+    if(!Array.isArray(item)||item.length<3||item.slice(0,3).some(x=>x==null||x===''||typeof x==='boolean'))return empty;
     const [id,s,e]=item.map(Number);
-    if(!Number.isInteger(id)||!Number.isFinite(s)||!Number.isFinite(e)||s<0||e<s||s>duration+100||e>duration+100)return empty;
+    if(!Number.isInteger(id)||id<1||!Number.isFinite(s)||!Number.isFinite(e)||s<0||e<s||s>duration+100||e>duration+100)return empty;
     if(id<=mapping.skip){basmalahWords.push([id,s,e,mapping.raw[id-1]||'']);continue;}
     const w=mapping.map.get(id);if(!w)return empty;
     words.push([w,s,e]);
@@ -3605,7 +3610,7 @@ function buildLocalVerse(r, metaA, surahNumForBismillah) {
     ayah: r.ayah,
     text: metaA.text || r.text,
     qusxWords,
-    audio: r.audio,
+    audio: readerValidSpan(r.source_offset_ms,r.duration_ms)?r.audio:null,
     duration_ms: remapped.duration_ms,
     source_offset_ms: remapped.source_offset_ms,
     words: repairWordTimestamps(remapped.words),
@@ -4193,19 +4198,18 @@ function clearHighlights() {
 
 function readerVerseAtTime(verses,file,ms,preferred=0){
   if(!file||!Number.isFinite(ms))return -1;
-  const same=v=>v.audio===file;
+  const same=v=>v&&v.audio===file&&readerValidSpan(v.source_offset_ms,v.duration_ms);
   const next=verses[preferred+1];
   if(next&&same(next)&&ms>=Number(next.source_offset_ms)&&ms<Number(next.source_offset_ms)+Number(next.duration_ms))return preferred+1;
   const cur=verses[preferred];
   if(cur&&same(cur)&&ms>=Number(cur.source_offset_ms)&&ms<Number(cur.source_offset_ms)+Number(cur.duration_ms))return preferred;
-  let first=-1,last=-1,best=-1,bestStart=-Infinity;
+  let best=-1,bestStart=-Infinity;
   for(let i=0;i<verses.length;i++){
     const v=verses[i];if(!same(v))continue;
-    if(first<0)first=i;
     const start=Number(v.source_offset_ms);
-    if(start<=ms){last=i;if(ms<start+Number(v.duration_ms)&&start>=bestStart){best=i;bestStart=start;}}
+    if(start<=ms&&ms<start+Number(v.duration_ms)&&start>=bestStart){best=i;bestStart=start;}
   }
-  return best>=0?best:last>=0?last:first;
+  return best;
 }
 function verseAtMs(ms){
   const idx=readerVerseAtTime(VERSES,currentAudioKey,ms,currentVerseIdx);
@@ -4216,7 +4220,7 @@ function updateHighlight() {
   if(readerLoading||pendingAudioSeek||audio.seeking||!currentAudioKey||!readerAudioMatches(currentAudioKey)||loadStatusEl.classList.contains('error'))return;
   const ms=audio.currentTime*1000;
   const idx=readerVerseAtTime(VERSES,currentAudioKey,ms,currentVerseIdx);
-  if(idx<0){clearHighlights();return;}
+  if(idx<0){clearHighlights();if(!audio.paused)readerAdvancePlayback(false);return;}
   const changed=idx!==currentVerseIdx;
   if (idx !== currentVerseIdx) {
     currentVerseIdx = idx;
@@ -4240,7 +4244,7 @@ function updateHighlight() {
     : null;
   document.querySelectorAll('.bismillah .bismillah-word').forEach(el => {
     const parentSurah = el.closest('.bismillah');
-    if (parentSurah && parentSurah.dataset.surah && parentSurah.dataset.surah !== String(v.surah)) {
+    if (v.ayah!==1 || (parentSurah && parentSurah.dataset.surah !== String(v.surah))) {
       el.classList.remove('active-word');
       return;
     }
@@ -4265,6 +4269,7 @@ function updateHighlight() {
     el.classList.toggle('active-ayah',v.alignmentVerified===false&&!audio.paused);
   });
   document.querySelectorAll('.mushaf-pages .word.active-word,.mushaf-pages .word.active-ayah').forEach(el => {
+    if(el.classList.contains('bismillah-word'))return;
     if (el.dataset.surah !== String(v.surah) || el.dataset.ayah !== String(v.ayah)) {
       el.classList.remove('active-word','active-ayah');
     }
@@ -4361,13 +4366,17 @@ seek.addEventListener('change', () => {
   cancelTapWordStop();
   if(!audio.duration||!currentAudioKey)return;
   const ms=Number(seek.value)/1000*audio.duration*1000;
-  const candidates=VERSES.map((v,idx)=>({v,idx})).filter(x=>x.v.audio===currentAudioKey);
+  const candidates=VERSES.map((v,idx)=>({v,idx})).filter(x=>x.v.audio===currentAudioKey&&readerValidSpan(x.v.source_offset_ms,x.v.duration_ms));
   if(!candidates.length)return;
   const start=Math.min(...candidates.map(x=>Number(x.v.source_offset_ms)));
   const end=Math.max(...candidates.map(x=>Number(x.v.source_offset_ms)+Number(x.v.duration_ms)));
   const target=Math.max(start,Math.min(end-1,ms));
   const idx=readerVerseAtTime(VERSES,currentAudioKey,target,currentVerseIdx);
   if(idx>=0)seekToWordMs(target,idx,!audio.paused);
+  else {
+    const next=candidates.filter(x=>Number(x.v.source_offset_ms)>target).sort((a,b)=>Number(a.v.source_offset_ms)-Number(b.v.source_offset_ms))[0];
+    if(next)seekToWordMs(Number(next.v.source_offset_ms),next.idx,!audio.paused);
+  }
 });
 
 document.getElementById('modeLetter').addEventListener('click', () => setMode('letter'));
