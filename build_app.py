@@ -1940,7 +1940,7 @@ function seekVerseStart(idx, autoplay) {
 
 // Seek to an absolute ms position in the current (or target) verse's audio file.
 function handleWordTap(v, wIdx, verseIdx, absStart) {
-  if(readerLoading)return;
+  if(readerLoading||VERSES[verseIdx]!==v||!readerPositionInVerse(v,absStart))return;
   cancelTapWordStop();
   if (!tapWordMode) {
     seekToWordMs(absStart, verseIdx, true);
@@ -1979,9 +1979,10 @@ function handleWordTap(v, wIdx, verseIdx, absStart) {
 }
 
 function seekToWordMs(absMs,verseIdx,autoplay){
-  const v=VERSES[verseIdx];if(!v||!Number.isFinite(absMs))return;
+  const v=VERSES[verseIdx];if(!v)return;
   cancelPendingAudioSeek();
   if(!v.audio||!readerValidSpan(v.source_offset_ms,v.duration_ms)){audio.pause();currentAudioKey=null;currentVerseIdx=verseIdx;clearHighlights();refreshScrubber(verseIdx);refreshInfoBar(verseIdx);scrollToPlayback(verseIdx,true);loadStatusEl.textContent='No aligned audio for '+v.surah+':'+v.ayah+' in this reciter.';loadStatusEl.classList.add('error');return;}
+  if(!readerPositionInVerse(v,absMs))absMs=Number(v.source_offset_ms);
   const token=audioSeekToken,request={token,verse:v,idx:verseIdx,ms:absMs,autoplay:!!autoplay};
   pendingAudioSeek=request;
   currentVerseIdx=verseIdx;lastScrollKey='';clearHighlights();
@@ -2001,7 +2002,7 @@ function seekToWordMs(absMs,verseIdx,autoplay){
   };
   const verify=()=>{
     if(!current()||!request.seekIssued||audio.seeking||!readerAudioMatches(v.audio))return;
-    if(Math.abs(audio.currentTime-absMs/1000)>.25)return;
+    if(!readerConfirmedSeek(v,absMs,audio.currentTime*1000))return;
     cleanup();pendingAudioSeek=null;currentVerseIdx=verseIdx;
     loadStatusEl.classList.remove('error');
     refreshScrubber(verseIdx);refreshInfoBar(verseIdx);syncPageToVerse(verseIdx);
@@ -2083,7 +2084,7 @@ function ensureAudioForVerse(idx, autoplay) {
   const v=VERSES[idx];if(!v)return;
   if(!v.audio){seekVerseStart(idx,autoplay);return;}
   if(pendingAudioSeek?.verse===v){pendingAudioSeek.autoplay=!!autoplay;return;}
-  if(audioIsReadyFor(v.audio)&&currentVerseIdx===idx&&!loadStatusEl.classList.contains('error')){
+  if(audioIsReadyFor(v.audio)&&currentVerseIdx===idx&&readerPositionInVerse(v,audio.currentTime*1000)&&!loadStatusEl.classList.contains('error')){
     if(autoplay&&audio.paused)audio.play().catch(()=>{loadStatusEl.textContent='Tap Play to continue recitation.';});
     return;
   }
@@ -2623,6 +2624,10 @@ function refreshReciterInfo() {
   infoAvatar.textContent = reciterInitials(name);
 }
 reciterSelect.addEventListener('change', async () => {
+  const changeToken=++readerLoadToken;
+  const previousVerse=VERSES[currentVerseIdx];
+  const resume=previousVerse?{resumeSurah:previousVerse.surah,resumeAyah:previousVerse.ayah,keepPlaying:false}:{keepPlaying:false};
+  readerLoading=true;cancelPendingAudioSeek();cancelTapWordStop();audio.pause();clearHighlights();currentAudioKey=null;
   RECITER_CONFIG = reciterSelect.value;
   refreshReciterInfo();
   if (!isLocalReciter() && browseMode === 'juz') {
@@ -2635,24 +2640,26 @@ reciterSelect.addEventListener('change', async () => {
   if (isLocalReciter()) {
     try {
       await ensureLocalManifest();
+      if(changeToken!==readerLoadToken)return;
       refreshSurahAvailability();
       refreshJuzSelect();
       // Prefer Fatiha (always in juz 1 pack); else first available local surah.
       const want = LOCAL_MANIFEST.surahNumbers.includes(currentSurah) ? currentSurah : LOCAL_MANIFEST.surahNumbers[0];
       surahSelect.value = String(want);
-      if (browseMode === 'juz') await loadJuz(currentJuz || LOCAL_MANIFEST.tracks[0].juz);
-      else await loadSurah(want);
+      if (browseMode === 'juz') await loadJuz(currentJuz || LOCAL_MANIFEST.tracks[0].juz,resume);
+      else await loadSurah(want,resume);
     } catch (err) {
+      if(changeToken!==readerLoadToken)return;
       LOCAL_ALHADR_AVAILABLE = false;
       applyLocalAlhadrAvailability();
       loadStatusEl.textContent = err.message + ' — switched to an online reciter.';
       loadStatusEl.classList.add('error');
       refreshSurahAvailability();
-      await loadSurah(currentSurah || 1);
+      await loadSurah(currentSurah || 1,resume);
     }
   } else {
     refreshSurahAvailability();
-    loadSurah(currentSurah);
+    loadSurah(currentSurah,resume);
   }
 });
 refreshReciterInfo();
@@ -3198,7 +3205,7 @@ function renderMushafPages() {
       const vMeta = SURAH_INDEX.find(x => x.num === v.surah);
       if (segment.from===1 && v.ayah === 1 && vMeta && vMeta.bismillahPre && v.surah !== 1 && !shownBismillah.has(v.surah)) {
         shownBismillah.add(v.surah);
-        const bismRows = v.basmalahWords;
+        const bismRows = readerCompleteBasmalah(v.basmalahWords)?v.basmalahWords:null;
         const b = document.createElement('div');
         b.className = 'bismillah';
         b.dataset.surah = v.surah;
@@ -3214,7 +3221,8 @@ function renderMushafPages() {
             const absStart = v.source_offset_ms + s;
             span.addEventListener('click', (e2) => {
               e2.stopPropagation();
-              seekToWordMs(absStart, verseIdx, true);
+              if(readerLoading||VERSES[verseIdx]!==v)return;
+              cancelTapWordStop();seekToWordMs(absStart, verseIdx, true);
             });
             b.appendChild(span);
             b.appendChild(document.createTextNode(' '));
@@ -3462,9 +3470,18 @@ function readerWordMapping(canonical,recited,allowBasmalah){
   }
   return next===base.length?{map,skip,raw}:null;
 }
+function readerCompleteBasmalah(rows){
+  return Array.isArray(rows)&&rows.length===4&&rows.every((row,i)=>row[0]===i+1&&normalizeArabicLocal(row[3])===['بسم','الله','الرحمن','الرحيم'][i]);
+}
 function readerValidSpan(offset,duration){
   const numeric=x=> (typeof x==='number'||(typeof x==='string'&&x.trim()!==''))&&Number.isFinite(Number(x));
   return numeric(offset)&&numeric(duration)&&Number(offset)>=0&&Number(duration)>0&&Number.isFinite(Number(offset)+Number(duration));
+}
+function readerPositionInVerse(v,ms){
+  return !!v&&readerValidSpan(v.source_offset_ms,v.duration_ms)&&Number.isFinite(ms)&&ms>=Number(v.source_offset_ms)&&ms<Number(v.source_offset_ms)+Number(v.duration_ms);
+}
+function readerConfirmedSeek(v,requested,actual){
+  return readerPositionInVerse(v,requested)&&readerPositionInVerse(v,actual)&&Math.abs(actual-requested)<=80;
 }
 function readerAlignTiming(row,canonical,allowBasmalah){
   const mapping=readerWordMapping(canonical,row.text_uthmani||row.text,allowBasmalah);
@@ -3638,6 +3655,21 @@ function repairWordTimestamps(words) {
   });
 }
 
+function readerCanonicalMeta(ayahMeta,surah,ayah){
+  const meta=ayahMeta?.[ayah];
+  if(!Array.isArray(meta?.words)||!meta.words.length||meta.words.some(w=>typeof w!=='string'||!w.trim()))throw Error('Missing canonical text for '+surah+':'+ayah);
+  return meta;
+}
+function readerLocalRows(rows,surah,count){
+  const byAyah=new Map();
+  for(const row of rows||[]){
+    const ayah=Number(row?.ayah);
+    if(Number(row?.surah)!==surah||!Number.isInteger(ayah)||ayah<1||ayah>count)continue;
+    if(byAyah.has(ayah)){byAyah.set(ayah,null);continue;}
+    byAyah.set(ayah,row);
+  }
+  return Array.from({length:count},(_,i)=>byAyah.get(i+1)||{surah,ayah:i+1});
+}
 function buildLocalVerse(r, metaA, surahNumForBismillah) {
   const qusxWords = metaA.words || [];
   const sMeta = SURAH_INDEX.find(s => s.num === (surahNumForBismillah || r.surah));
@@ -3646,9 +3678,9 @@ function buildLocalVerse(r, metaA, surahNumForBismillah) {
   return {
     surah: r.surah,
     ayah: r.ayah,
-    text: metaA.text || r.text,
+    text: metaA.text || qusxWords.join(' '),
     qusxWords,
-    audio: readerValidSpan(r.source_offset_ms,r.duration_ms)?r.audio:null,
+    audio: readerValidSpan(r.source_offset_ms,r.duration_ms)&&typeof r.audio==='string'&&r.audio.trim()?r.audio:null,
     duration_ms: remapped.duration_ms,
     source_offset_ms: remapped.source_offset_ms,
     words: repairWordTimestamps(remapped.words),
@@ -3681,7 +3713,7 @@ async function loadJuz(juzNum, opts) {
   opts = opts || {};
   if (!isLocalReciter()) throw new Error('Juz mode requires local Al-Hadr reciter');
   const wasPlaying=!audio.paused||!!pendingAudioSeek?.autoplay;
-  const request=++readerLoadToken;readerLoading=true;cancelPendingAudioSeek();cancelTapWordStop();audio.pause();
+  const request=++readerLoadToken;readerLoading=true;cancelPendingAudioSeek();cancelTapWordStop();audio.pause();clearHighlights();
   try{await ensureLocalManifest();}catch(e){if(request===readerLoadToken)readerLoading=false;throw e;}
   if(request!==readerLoadToken)return;
   browseMode = 'juz';
@@ -3725,7 +3757,7 @@ async function loadJuz(juzNum, opts) {
 
     VERSES = ayahs.map(r => {
       const parsed = bySurah[r.surah];
-      const metaA = (parsed && parsed.ayahMeta[r.ayah]) || {};
+      const metaA = readerCanonicalMeta(parsed?.ayahMeta,r.surah,r.ayah);
       return buildLocalVerse(r, metaA, r.surah);
     });
     if(!VERSES.length)throw Error('No aligned verses available');
@@ -3825,7 +3857,7 @@ function readResumeState() {
   } catch (_) { return null; }
 }
 function saveResumeState() {
-  if(readerLoading)return;
+  if(readerLoading||loadStatusEl.classList.contains('error'))return;
   const v = VERSES[currentVerseIdx];
   if (!v) return;
   const state = {
@@ -3833,7 +3865,7 @@ function saveResumeState() {
     surah: v.surah,
     ayah: v.ayah,
     juz: currentJuz,
-    time: pendingAudioSeek?.verse===v?pendingAudioSeek.ms/1000:(currentAudioKey===v.audio?audio.currentTime:(v.source_offset_ms/1000)),
+    time: pendingAudioSeek?.verse===v?pendingAudioSeek.ms/1000:(currentAudioKey===v.audio&&readerAudioMatches(v.audio)&&readerPositionInVerse(v,audio.currentTime*1000)?audio.currentTime:(Number(v.source_offset_ms)||0)/1000),
     reciter: RECITER_CONFIG,
     layout: currentLayout,
     ts: Date.now(),
@@ -3871,7 +3903,7 @@ const speedSelect = document.getElementById('speedSelect');
 async function loadSurah(num, opts) {
   opts = opts || {};
   const wasPlaying=!audio.paused||!!pendingAudioSeek?.autoplay;
-  const request=++readerLoadToken;readerLoading=true;cancelPendingAudioSeek();cancelTapWordStop();
+  const request=++readerLoadToken;readerLoading=true;cancelPendingAudioSeek();cancelTapWordStop();audio.pause();clearHighlights();
   browseMode = 'surah';
   browseModeSelect.value = 'surah';
   surahSelect.style.display = '';
@@ -3885,6 +3917,7 @@ async function loadSurah(num, opts) {
   currentSurah = num;
   surahSelect.value = String(num);
   const meta = SURAH_INDEX.find(s => s.num === num);
+  if(!meta){readerLoading=false;loadStatusEl.textContent='Invalid surah';loadStatusEl.classList.add('error');return;}
   loadStatusEl.textContent = 'Loading ' + meta.name + '…';
   loadStatusEl.classList.remove('error');
   audio.pause();
@@ -3906,7 +3939,7 @@ async function loadSurah(num, opts) {
 
     const timingPromise = localPack
       ? Promise.resolve(null)
-      : fetchAllRows(num, meta.ayahCount);
+      : fetchAllRows(num, meta.ayahCount).catch(()=>[]);
     const [rows, xmlRes] = await Promise.all([timingPromise, fetch(xmlUrl)]);
     if (!xmlRes.ok) throw new Error('QUSX text fetch failed (' + xmlRes.status + ')');
     const xmlText = await xmlRes.text();
@@ -3930,7 +3963,7 @@ async function loadSurah(num, opts) {
     }
 
     if (localPack) {
-      VERSES = localPack.ayahs.map(r => buildLocalVerse(r, ayahMeta[r.ayah] || {}, num));
+      VERSES = readerLocalRows(localPack.ayahs,num,meta.ayahCount).map(r => buildLocalVerse(r,readerCanonicalMeta(ayahMeta,num,r.ayah),num));
     } else {
       const byAyah=new Map();
       for(const {row} of rows){
@@ -3939,7 +3972,7 @@ async function loadSurah(num, opts) {
       }
       VERSES=Array.from({length:meta.ayahCount},(_,i)=>{
         const ayah=i+1,canonical=ayahMeta[ayah];
-        if(!canonical?.words?.length)throw Error('Missing canonical text for '+num+':'+ayah);
+        readerCanonicalMeta(ayahMeta,num,ayah);
         return readerOnlineVerse(byAyah.get(ayah),canonical,num,ayah,ayah===1&&num!==1&&!!meta.bismillahPre);
       });
     }
@@ -4101,7 +4134,7 @@ function scrollToPlayback(idx, force) {
 function readerAdvancePlayback(ended){
   if(readerLoading||pendingAudioSeek||audio.seeking||surahAdvanceBusy||browsing||tapFrameId)return;
   const v=VERSES[currentVerseIdx];
-  if(!v||v.audio!==currentAudioKey||!readerAudioMatches(v.audio))return;
+  if(!v||loadStatusEl.classList.contains('error')||v.audio!==currentAudioKey||!readerAudioMatches(v.audio))return;
   if(!ended&&(v.clipRelative||audio.currentTime*1000<Number(v.source_offset_ms)+Number(v.duration_ms)))return;
   const next=VERSES[currentVerseIdx+1];
   if(next){
@@ -4900,7 +4933,7 @@ seek.addEventListener('click', () => { if (browsing) exitBrowse(); });
   }
   function readerUpdatePlayButtons(){
     for(const b of document.querySelectorAll('.qv-play')){
-      const playing=Number(b.dataset.idx)===currentVerseIdx&&!audio.paused;b.textContent=playing?'Ⅱ':'▶';
+      const playing=!readerLoading&&!pendingAudioSeek&&Number(b.dataset.idx)===currentVerseIdx&&!audio.paused;b.textContent=playing?'Ⅱ':'▶';
       b.setAttribute('aria-pressed',String(playing));
     }
   }
