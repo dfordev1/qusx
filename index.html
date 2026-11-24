@@ -1469,6 +1469,33 @@
     .qv-arabic { padding-block:.35em .45em; line-height:max(var(--reader-leading),2.05); }
   }
 
+
+  /* Reading and Translation share native Unicode word shaping.
+     Preserve exact printed line membership, but avoid artificial gaps
+     between Unicode words when the line has spare space. */
+  .mushaf-text.native-words .mushaf-line {
+    justify-content:flex-start; gap:.24em;
+    font-kerning:normal; font-variant-ligatures:normal;
+    font-feature-settings:normal; letter-spacing:normal;
+    word-spacing:normal;
+  }
+  .mushaf-text.native-words .mushaf-line > .word {
+    display:inline-block; flex:0 0 auto; min-width:max-content;
+    font:inherit; direction:rtl; unicode-bidi:normal;
+    letter-spacing:normal; word-spacing:normal;
+    font-feature-settings:normal; font-variant-ligatures:normal;
+    white-space:nowrap; padding:0; margin:0;
+  }
+  .mushaf-text .mushaf-line.is-short { justify-content:flex-start; gap:.24em; }
+  .mushaf-text .unicode-fallback {
+    font-family:'Scheherazade New','UthmanicHafs','Noto Naskh Arabic','Traditional Arabic',serif;
+    font-feature-settings:normal; font-variant-ligatures:normal;
+    letter-spacing:normal; word-spacing:normal;
+  }
+  @media(max-width:899px){
+    .mushaf-text.native-words .mushaf-line { gap:.22em; }
+  }
+
 </style>
 </head>
 <body>
@@ -1662,26 +1689,30 @@ const GLYPH_V1 = {"1":{"1":"ﭑﭒﭓﭔﭕ","2":"ﭖﭗﭘﭙﭚ","3":"ﭛﭜ�
 
 // Per-page QCF fonts: key = "v1:50" / "v2:50" / "v4:50".
 const loadedPageFonts = new Set();
+const loadingPageFonts = new Map();
 const QCF_FONT_URL = {
   v1: (p) => 'https://verses.quran.foundation/fonts/quran/hafs/v1/woff2/p' + p + '.woff2',
   v2: (p) => 'https://verses.quran.foundation/fonts/quran/hafs/v2/woff2/p' + p + '.woff2',
   v4: (p) => 'https://verses.quran.foundation/fonts/quran/hafs/v4/colrv1/woff2/p' + p + '.woff2',
 };
 const QCF_FAMILY_PREFIX = { v1: 'QCF1P', v2: 'QCFP', v4: 'QCFT' };
-async function ensurePageFont(edition, page) {
-  if (!page || !QCF_FONT_URL[edition]) return;
-  const key = edition + ':' + page;
-  if (loadedPageFonts.has(key)) return;
-  loadedPageFonts.add(key);
-  try {
-    const font = new FontFace(QCF_FAMILY_PREFIX[edition] + page, 'url(' + QCF_FONT_URL[edition](page) + ')');
-    await font.load();
-    document.fonts.add(font);
-    requestAnimationFrame(markShortMushafLines);
-  } catch (e) {
-    // Offline/blocked — mushaf falls back to tofu for that page's PUA codes.
-  }
+async function ensurePageFont(edition,page){
+  if(!page||!QCF_FONT_URL[edition])return false;
+  const key=edition+':'+page;
+  if(loadedPageFonts.has(key))return true;
+  if(loadingPageFonts.has(key))return loadingPageFonts.get(key);
+  const job=(async()=>{
+    try{
+      const font=new FontFace(QCF_FAMILY_PREFIX[edition]+page,'url('+QCF_FONT_URL[edition](page)+')');
+      await font.load();document.fonts.add(font);loadedPageFonts.add(key);
+      requestAnimationFrame(markShortMushafLines);
+      return true;
+    }catch(_){return false;}
+  })();
+  loadingPageFonts.set(key,job);
+  try{return await job;}finally{loadingPageFonts.delete(key);}
 }
+
 async function ensureTajweedFont(page) {
   return ensurePageFont('v4', page);
 }
@@ -3032,13 +3063,13 @@ function readerPageNumbers(verses){
 }
 function renderMushafPages() {
   if(readerPresentation==='translation'){renderVerseReader();return;}
-  readerStopGloss();
+  readerStopGloss();readerClearLetterRange();
   mushafPagesEl.innerHTML = '';
   if (!VERSES.length) return;
-  // Letter/Word: same continuous page/line shell as Mushaf, but Uthmani
-  // letter spans so phoneme highlighting still works. Mushaf: QCF glyphs.
+  // Both views use intact Arabic word text for Unicode, with ranges for
+  // phoneme highlighting. Authentic loaded QCF word glyphs stay unchanged.
   const withLetters = mode !== 'mushaf' || textScript === 'uthmani-simple';
-  if (withLetters) flatLetters = [];
+  flatLetters = [];
   hydrateSimpleTextForVisibleVerses();
   const sMeta = SURAH_INDEX.find(x => x.num === currentSurah);
 
@@ -3067,12 +3098,12 @@ function renderMushafPages() {
 
     const flow = document.createElement('div');
     flow.className = 'verse-text mushaf-text' + (withLetters ? ' with-letters' : '');
+    flow.lang='ar';flow.dir='rtl';
     const profile = layoutProfile();
-    const useGlyphs = !withLetters && profile.kind === 'glyph';
-    if (useGlyphs && g.page) {
-      // V1 stays on QCF V1; V4-tajweed layout always COLRv1; V2 toggles V2↔V4.
-      const fontEdition = profile.pageFont === 'v1' ? 'v1'
-        : ((tajweedOn || profile.tajweedForced) ? 'v4' : 'v2');
+    const fontEdition=profile.pageFont==='v1'?'v1':((tajweedOn||profile.tajweedForced)?'v4':'v2');
+    const useGlyphs=!withLetters&&profile.kind==='glyph'&&g.page&&loadedPageFonts.has(fontEdition+':'+g.page);
+    if(!useGlyphs)flow.classList.add('native-words');
+    if (useGlyphs) {
       flow.style.fontFamily = QCF_FAMILY_PREFIX[fontEdition] + g.page + ', "Traditional Arabic", serif';
     } else if (withLetters) {
       flow.style.fontFamily = textFontCss();
@@ -3145,16 +3176,13 @@ function renderMushafPages() {
           flow.appendChild(lineDiv);
           curLineNum = thisLine;
         }
-        if (withLetters) {
-          const wordSpan = buildTimedWordSpan(v, wIdx, verseIdx);
-          if (wordSpan) lineDiv.appendChild(wordSpan);
-        } else {
-          const wordStart = wordTimeMs.has(wIdx) ? wordTimeMs.get(wIdx) : null;
-          const gSpan = useGlyphs
-            ? buildMushafGlyphSpan(v, wIdx, wordStart, verseIdx)
-            : buildMushafPlainSpan(v, wIdx, qusxWords[wIdx - 1], wordStart, verseIdx);
-          if (gSpan) lineDiv.appendChild(gSpan);
+        const wordStart=wordTimeMs.has(wIdx)?wordTimeMs.get(wIdx):null;
+        let word=useGlyphs?buildMushafGlyphSpan(v,wIdx,wordStart,verseIdx):null;
+        if(!word){
+          word=readerBuildShapedWord(v,wIdx,verseIdx);
+          if(useGlyphs)word.classList.add('unicode-fallback');
         }
+        lineDiv.appendChild(word);
       }
       if(segment.to!==qusxWords.length)continue;
       if (useGlyphs) {
@@ -3219,7 +3247,9 @@ function markShortMushafLines() {
         const style=getComputedStyle(child);
         return sum+child.getBoundingClientRect().width+(parseFloat(style.marginLeft)||0)+(parseFloat(style.marginRight)||0);
       },0)+gap*Math.max(0,children.length-1);
-      // Leave a little room for script glyphs that extend beyond their advance.
+      // Sparse lines (especially chapter starts/ends) should not be stretched
+      // into widely separated words. Genuine full lines retain their layout.
+      if(width<line.clientWidth*.68)line.classList.add('is-short');
       factor=Math.min(factor,readerFitScale(Math.max(1,line.clientWidth-6),width));
     }
     if(factor<1&&base>0)page.style.fontSize=(Math.floor(base*factor*10)/10)+'px';
@@ -4146,23 +4176,8 @@ function updateHighlight() {
   });
 
   readerHighlightCurrentLetter(v,activeWord,ms);
-  // Letter glow only in Letter mode (Word mode uses the boxed word highlight).
-  document.querySelectorAll('.mushaf-pages .letter.lit').forEach(el => el.classList.remove('lit'));
-  if (readerPresentation!=='translation' && mode === 'letter' && activeWord !== null) {
-    document.querySelectorAll('.mushaf-pages .word' + scope + '[data-word="' + activeWord + '"]').forEach(wordEl => {
-      const letters = [...wordEl.querySelectorAll('.letter:not(.mark-only)')];
-      let cur = null;
-      for (let i = 0; i < letters.length; i++) {
-        const start = +letters[i].dataset.start;
-        if (!(ms >= start)) break;
-        const next = letters[i + 1];
-        const nextStart = next ? +next.dataset.start : Infinity;
-        if (ms < nextStart) { cur = letters[i]; break; }
-        cur = letters[i];
-      }
-      if (cur) cur.classList.add('lit');
-    });
-  }
+  // Native text range highlighting works in both views; no per-letter DOM split.
+  document.querySelectorAll('.mushaf-pages .letter.lit').forEach(el=>el.classList.remove('lit'));
 
   // Word wash/box for Letter, Word, and Mushaf (Letter uses a lighter wash via CSS).
   document.querySelectorAll('.mushaf-pages .word' + scope).forEach(el => {
@@ -4307,8 +4322,8 @@ function setMode(m) {
   document.getElementById('modeLetter').classList.toggle('on', m === 'letter');
   document.getElementById('modeWord').classList.toggle('on', m === 'word');
   document.getElementById('modeMushaf').classList.toggle('on', m === 'mushaf');
-  // All three modes use the continuous mushaf page shell. Letter/Word render
-  // Uthmani letter spans; Mushaf renders layout-native glyphs/fonts.
+  // All reading modes preserve canonical word order. Unicode words use
+  // native joining; authentic QCF glyphs are used only with a loaded font.
   versesEl.style.display = 'none';
   mushafPagesEl.style.display = 'flex';
   tajweedBtn.disabled = m !== 'mushaf' || textScript === 'uthmani-simple'
@@ -4408,8 +4423,8 @@ function showBrowseLetter(gidx) {
   if (cell) {
     cell.classList.add('lit');
     cell.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  } else if(readerPresentation==='translation'){
-    for(const word of mushafPagesEl.querySelectorAll('.qv-arabic .word'+verseDomScope(L.verse))){
+  } else {
+    for(const word of mushafPagesEl.querySelectorAll('.word'+verseDomScope(L.verse))){
       const match=(readerLetterRanges.get(word)||[]).find(r=>r.gidx===browseIdx);
       if(match){readerPaintLetterRange(word,match);word.scrollIntoView({behavior:'smooth',block:'center'});break;}
     }
@@ -4694,8 +4709,8 @@ seek.addEventListener('click', () => { if (browsing) exitBrowse(); });
   }
   function readerHighlightCurrentLetter(v,activeWord,ms){
     readerClearLetterRange();
-    if(readerPresentation!=='translation'||mode!=='letter'||activeWord==null)return;
-    const word=mushafPagesEl.querySelector('.qv-arabic .word'+verseDomScope(v)+'[data-word="'+activeWord+'"]');
+    if(mode!=='letter'||activeWord==null)return;
+    const word=mushafPagesEl.querySelector('.word'+verseDomScope(v)+'[data-word="'+activeWord+'"]');
     if(!word)return;
     const ranges=readerLetterRanges.get(word)||[];
     let match=null;
