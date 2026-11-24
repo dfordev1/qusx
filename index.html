@@ -1691,7 +1691,18 @@ let RECITER_CONFIG = RECITERS[0][0]; // may fall back after probing local_alhadr
 const LOCAL_RECITER_ID = 'local_alhadr';
 let LOCAL_MANIFEST = null; // loaded on demand from ./local_alhadr/manifest.json
 let LOCAL_ALHADR_AVAILABLE = null; // null = unknown, true/false after probe
-let currentAudioKey = null; // which verse.audio is currently loaded into <audio>
+let currentAudioKey = null; // actual audio file identity, not just a timestamp
+let audioSeekToken=0, pendingAudioSeek=null, readerLoadToken=0, readerLoading=false;
+function readerAudioUrl(url){
+  try{return new URL(url,document.baseURI).href;}catch(_){return String(url||'');}
+}
+function readerAudioMatches(url){
+  return !!url && readerAudioUrl(audio.currentSrc||audio.src)===readerAudioUrl(url);
+}
+function cancelPendingAudioSeek(){
+  audioSeekToken++;
+  pendingAudioSeek=null;
+}
 
 function isLocalReciter() { return RECITER_CONFIG === LOCAL_RECITER_ID; }
 
@@ -1824,7 +1835,7 @@ function audioIsReadyFor(url) {
   if (!url || !audio.src) return false;
   if (currentAudioKey !== url) return false;
   // HAVE_METADATA or better — safe to seek/play.
-  return audio.readyState >= 1;
+  return audio.readyState >= 1 && readerAudioMatches(url);
 }
 
 function refreshSurahAvailability() {
@@ -1896,28 +1907,31 @@ function handleWordTap(v, wIdx, verseIdx, absStart) {
 }
 
 function seekToWordMs(absMs, verseIdx, autoplay) {
-  const v = VERSES[verseIdx];
-  if (!v) return;
-  currentVerseIdx = verseIdx;
-  lastScrollKey = '';
-  clearHighlights();
-  refreshScrubber(verseIdx);
-  refreshInfoBar(verseIdx);
-  const apply = () => {
-    try { audio.currentTime = absMs / 1000; } catch (_) {}
-    if (autoplay) audio.play().catch(() => {});
-    updateHighlight();
-    scrollToPlayback(verseIdx, true);
+  const v=VERSES[verseIdx];if(!v||!Number.isFinite(absMs))return;
+  const token=++audioSeekToken;
+  const request={token,verse:v,idx:verseIdx,ms:absMs,autoplay:!!autoplay};
+  pendingAudioSeek=request;
+  currentVerseIdx=verseIdx;lastScrollKey='';clearHighlights();
+  refreshScrubber(verseIdx);refreshInfoBar(verseIdx);syncPageToVerse(verseIdx);
+  const ready=audioIsReadyFor(v.audio);
+  const apply=()=>{
+    if(pendingAudioSeek!==request||token!==audioSeekToken||VERSES[verseIdx]!==v||!readerAudioMatches(v.audio))return;
+    currentVerseIdx=verseIdx;
+    try{audio.currentTime=absMs/1000;}catch(e){pendingAudioSeek=null;loadStatusEl.textContent='Could not seek audio: '+e.message;loadStatusEl.classList.add('error');return;}
+    pendingAudioSeek=null;
+    refreshScrubber(verseIdx);refreshInfoBar(verseIdx);syncPageToVerse(verseIdx);
+    scrollToPlayback(verseIdx,true);
+    if(request.autoplay)audio.play().catch(()=>{loadStatusEl.textContent='Tap Play to continue recitation.';});
+    if(!audio.seeking)updateHighlight();
+    saveResumeState();
   };
-  const needLoad = !audioIsReadyFor(v.audio);
-  if (needLoad) {
-    currentAudioKey = v.audio;
-    audio.addEventListener('loadedmetadata', apply, { once: true });
-    audio.src = v.audio;
-    audio.load();
-    return;
-  }
-  apply();
+  if(!ready){
+    audio.pause();
+    currentAudioKey=v.audio;
+    audio.addEventListener('loadedmetadata',apply,{once:true});
+    if(!readerAudioMatches(v.audio)||audio.readyState===0){audio.src=v.audio;audio.load();}
+    else if(audio.readyState>=1)apply();
+  }else apply();
 }
 
 // Extend each word's end to the next word's start so gaps between ASR words
@@ -1964,20 +1978,13 @@ function activeWordAtMs(v, ms) {
 }
 
 function ensureAudioForVerse(idx, autoplay) {
-  const v = VERSES[idx];
-  if (!v) return;
-  if (audioIsReadyFor(v.audio)) {
-    // Resume from the current scrubber position — do not snap to ayah start.
-    if (autoplay && audio.paused) audio.play().catch(() => {});
+  const v=VERSES[idx];if(!v)return;
+  if(pendingAudioSeek?.verse===v){pendingAudioSeek.autoplay=!!autoplay;return;}
+  if(audioIsReadyFor(v.audio)&&currentVerseIdx===idx){
+    if(autoplay&&audio.paused)audio.play().catch(()=>{loadStatusEl.textContent='Tap Play to continue recitation.';});
     return;
   }
-  const wasPlaying = autoplay || !audio.paused;
-  currentAudioKey = v.audio;
-  audio.dataset.audioTriedUrls = '';
-  const onMeta = () => seekVerseStart(idx, wasPlaying);
-  audio.addEventListener('loadedmetadata', onMeta, { once: true });
-  audio.src = v.audio;
-  audio.load();
+  seekVerseStart(idx,autoplay);
 }
 
 // Per-surah ayah-count deltas across qira'at numbering traditions (Warsh,
@@ -2212,9 +2219,9 @@ audio.addEventListener('error', () => {
     loadStatusEl.classList.remove('error');
   }
   const idx = currentVerseIdx || 0;
-  audio.addEventListener('loadedmetadata', () => seekVerseStart(idx, true), { once: true });
-  audio.src = next;
-  audio.load();
+  const resumePlay=pendingAudioSeek?pendingAudioSeek.autoplay:!audio.paused;
+  cancelPendingAudioSeek();
+  seekVerseStart(idx,resumePlay);
 });
 
 let browseMode = 'surah'; // 'surah' | 'juz'
@@ -2390,8 +2397,9 @@ function pageIndexForVerse(idx) {
 function syncPageToVerse(idx) {
   if(readerPresentation==='translation')return;
   if (pageViewMode !== 'page') return;
-  const pi = pageIndexForVerse(idx);
-  if (pi !== currentPageIdx) showMushafPage(pi);
+  const pi=pageIndexForVerse(idx);
+  const pages=mushafPagesEl.querySelectorAll('.mushaf-page');
+  if(pi!==currentPageIdx||!pages[pi]?.classList.contains('is-visible')){showMushafPage(pi);lastScrollKey='';}
 }
 
 if (pageViewSelect) {
@@ -3485,7 +3493,9 @@ function collectLocalJuzAyahs(juz) {
 async function loadJuz(juzNum, opts) {
   opts = opts || {};
   if (!isLocalReciter()) throw new Error('Juz mode requires local Al-Hadr reciter');
-  await ensureLocalManifest();
+  const request=++readerLoadToken;readerLoading=true;cancelPendingAudioSeek();cancelTapWordStop();
+  try{await ensureLocalManifest();}catch(e){if(request===readerLoadToken)readerLoading=false;throw e;}
+  if(request!==readerLoadToken)return;
   browseMode = 'juz';
   browseModeSelect.value = 'juz';
   surahSelect.style.display = 'none';
@@ -3518,6 +3528,7 @@ async function loadJuz(juzNum, opts) {
       if (!res.ok) throw new Error('QUSX fetch failed for surah ' + sn + ' (' + res.status + ')');
       return [sn, parseQusxXml(await res.text())];
     }));
+    if(request!==readerLoadToken)return;
     const bySurah = Object.fromEntries(xmlResults);
     MORPHOLOGY = {};
     for (const sn of surahNums) {
@@ -3531,35 +3542,25 @@ async function loadJuz(juzNum, opts) {
       const metaA = (parsed && parsed.ayahMeta[r.ayah]) || {};
       return buildLocalVerse(r, metaA, r.surah);
     });
+    if(!VERSES.length)throw Error('No aligned verses available');
     currentSurah = VERSES[0].surah;
-
+    currentVerseIdx=0;
     renderAll();
     lastScrollKey = '';
     const resumeAt = opts.resumeAt != null ? opts.resumeAt : prevTime;
-    const stillOnFile = continuePlayback && prevAudioKey
-      && VERSES.some(v => v.audio === prevAudioKey)
-      && audioIsReadyFor(prevAudioKey);
-    if (stillOnFile) {
-      currentAudioKey = prevAudioKey;
-      if (Number.isFinite(resumeAt)) {
-        try { audio.currentTime = resumeAt; } catch (_) {}
-      }
-      if (keepPlaying) audio.play().catch(() => {});
-      currentVerseIdx = (opts.resumeVerseIdx != null && VERSES[opts.resumeVerseIdx])
-        ? opts.resumeVerseIdx
-        : verseAtMs(audio.currentTime * 1000);
-    } else if (opts.resumeSurah != null && opts.resumeAyah != null) {
-      const vi = findVerseIdx(opts.resumeSurah, opts.resumeAyah);
-      currentVerseIdx = vi >= 0 ? vi : 0;
-    } else {
-      ensureAudioForVerse(0, keepPlaying);
-      currentVerseIdx = 0;
+    const targetIdx=opts.resumeSurah!=null&&opts.resumeAyah!=null?findVerseIdx(opts.resumeSurah,opts.resumeAyah):-1;
+    let idx=targetIdx>=0?targetIdx:(Number.isInteger(opts.resumeVerseIdx)&&VERSES[opts.resumeVerseIdx]?opts.resumeVerseIdx:0);
+    if(targetIdx<0 && opts.resumeVerseIdx==null && continuePlayback && prevAudioKey && VERSES.some(v=>v.audio===prevAudioKey)){
+      const located=readerVerseAtTime(VERSES,prevAudioKey,prevTime*1000,idx);
+      if(located>=0)idx=located;
     }
-    refreshScrubber(currentVerseIdx);
-    refreshInfoBar(currentVerseIdx);
-    scrollToPlayback(currentVerseIdx, true);
-    updateHighlight();
-    finalizeLoadPosition(opts);
+    const target=VERSES[idx];
+    const requestedTime=Number(opts.resumeAt);
+    const candidate=targetIdx>=0&&opts.resumeAt!=null?requestedTime:(continuePlayback&&prevAudioKey===target.audio?resumeAt:NaN);
+    const start=Number(target.source_offset_ms),end=start+Number(target.duration_ms);
+    const ms=Number.isFinite(candidate)&&candidate*1000>=start-40&&candidate*1000<end?Math.max(start,candidate*1000):start;
+    seekToWordMs(ms,idx,keepPlaying);
+    finalizeLoadPosition({openPage:opts.openPage});
 
     const profile = layoutProfile();
     if (profile.kind === 'glyph') {
@@ -3567,15 +3568,14 @@ async function loadJuz(juzNum, opts) {
       const useV4 = tajweedOn || profile.tajweedForced;
       const edition = profile.pageFont === 'v1' ? 'v1' : (useV4 ? 'v4' : 'v2');
       Promise.all(pages.map(p => ensurePageFont(edition, p))).then(() => {
-        if (currentJuz === juzNum) renderMushafPages();
+        if (request===readerLoadToken&&currentJuz===juzNum&&readerPresentation==='reading'){renderMushafPages();lastScrollKey='';updateHighlight();}
       }).catch(() => {});
     }
 
     loadStatusEl.textContent = 'Juz ' + juzNum + ' · ' + VERSES.length + ' ayahs';
   } catch (err) {
-    loadStatusEl.textContent = 'Could not load Juz ' + juzNum + ': ' + err.message;
-    loadStatusEl.classList.add('error');
-  }
+    if(request===readerLoadToken){audio.pause();loadStatusEl.textContent = 'Could not load Juz ' + juzNum + ': ' + err.message;loadStatusEl.classList.add('error');}
+  }finally{if(request===readerLoadToken){readerLoading=false;if(!pendingAudioSeek&&!audio.seeking)updateHighlight();}}
 }
 
 function nextLocalSurah(from) {
@@ -3678,7 +3678,7 @@ function saveResumeState() {
     surah: v.surah,
     ayah: v.ayah,
     juz: currentJuz,
-    time: audio.currentTime || 0,
+    time: pendingAudioSeek?.verse===v?pendingAudioSeek.ms/1000:(currentAudioKey===v.audio?audio.currentTime:(v.source_offset_ms/1000)),
     reciter: RECITER_CONFIG,
     layout: currentLayout,
     ts: Date.now(),
@@ -3715,6 +3715,7 @@ const speedSelect = document.getElementById('speedSelect');
 // opts.continuePlayback: keep audio rolling across surah boundaries (Fatiha→Baqarah).
 async function loadSurah(num, opts) {
   opts = opts || {};
+  const request=++readerLoadToken;readerLoading=true;cancelPendingAudioSeek();cancelTapWordStop();
   browseMode = 'surah';
   browseModeSelect.value = 'surah';
   surahSelect.style.display = '';
@@ -3743,6 +3744,7 @@ async function loadSurah(num, opts) {
     let localPack = null;
     if (isLocalReciter()) {
       await ensureLocalManifest();
+      if(request!==readerLoadToken)return;
       refreshSurahAvailability();
       localPack = LOCAL_MANIFEST.surahs[String(num)];
       if (!localPack) throw new Error('No local Al-Hadr timing for surah ' + num);
@@ -3754,6 +3756,7 @@ async function loadSurah(num, opts) {
     const [rows, xmlRes] = await Promise.all([timingPromise, fetch(xmlUrl)]);
     if (!xmlRes.ok) throw new Error('QUSX text fetch failed (' + xmlRes.status + ')');
     const xmlText = await xmlRes.text();
+    if(request!==readerLoadToken)return;
 
     // Actually walk QUSX's milestone structure — this is a USX-style flat
     // word stream sliced by independent sid/eid boundary pins (juz, hizb,
@@ -3795,51 +3798,25 @@ async function loadSurah(num, opts) {
       });
     }
 
+    if(!VERSES.length)throw Error('No aligned verses available');
+    currentVerseIdx=0;
     renderAll();
     lastScrollKey = '';
     const resumeAt = opts.resumeAt != null ? opts.resumeAt : prevTime;
 
-    if (isLocalReciter()) {
-      const stillOnFile = continuePlayback && prevAudioKey
-        && VERSES.some(v => v.audio === prevAudioKey)
-        && audioIsReadyFor(prevAudioKey);
-      if (stillOnFile) {
-        // Keep the juz opus rolling (e.g. Fatiha → Baqarah on juz-01).
-        currentAudioKey = prevAudioKey;
-        if (Number.isFinite(resumeAt)) {
-          try { audio.currentTime = resumeAt; } catch (_) {}
-        } else if (prevTime + 0.05 < VERSES[0].source_offset_ms / 1000) {
-          audio.currentTime = VERSES[0].source_offset_ms / 1000;
-        }
-        if (keepPlaying) audio.play().catch(() => {});
-      } else if (opts.resumeSurah != null && opts.resumeAyah != null) {
-        const vi = findVerseIdx(opts.resumeSurah, opts.resumeAyah);
-        currentVerseIdx = vi >= 0 ? vi : 0;
-      } else {
-        ensureAudioForVerse(0, keepPlaying);
-        if (keepPlaying && continuePlayback) seekVerseStart(0, true);
-      }
-    } else if (continuePlayback && prevAudioKey && VERSES.some(v => v.audio === prevAudioKey)) {
-      currentAudioKey = prevAudioKey;
-      if (Number.isFinite(resumeAt)) {
-        try { audio.currentTime = resumeAt; } catch (_) {}
-      }
-      if (keepPlaying) audio.play().catch(() => {});
-    } else {
-      audio.src = VERSES[0].audio;
-      currentAudioKey = VERSES[0].audio;
+    const targetIdx=opts.resumeSurah!=null&&opts.resumeAyah!=null?findVerseIdx(opts.resumeSurah,opts.resumeAyah):-1;
+    let idx=targetIdx>=0?targetIdx:(Number.isInteger(opts.resumeVerseIdx)&&VERSES[opts.resumeVerseIdx]?opts.resumeVerseIdx:0);
+    if(targetIdx<0 && opts.resumeVerseIdx==null && continuePlayback && prevAudioKey && VERSES.some(v=>v.audio===prevAudioKey)){
+      const located=readerVerseAtTime(VERSES,prevAudioKey,prevTime*1000,idx);
+      if(located>=0)idx=located;
     }
-
-    if (opts.resumeSurah == null || opts.resumeAyah == null) {
-      currentVerseIdx = (opts.resumeVerseIdx != null && VERSES[opts.resumeVerseIdx])
-        ? opts.resumeVerseIdx
-        : verseAtMs(audio.currentTime * 1000);
-    }
-    refreshScrubber(currentVerseIdx);
-    refreshInfoBar(currentVerseIdx);
-    scrollToPlayback(currentVerseIdx, true);
-    updateHighlight();
-    finalizeLoadPosition(opts);
+    const target=VERSES[idx];
+    const requestedTime=Number(opts.resumeAt);
+    const candidate=targetIdx>=0&&opts.resumeAt!=null?requestedTime:(continuePlayback&&prevAudioKey===target.audio?resumeAt:NaN);
+    const start=Number(target.source_offset_ms),end=start+Number(target.duration_ms);
+    const ms=Number.isFinite(candidate)&&candidate*1000>=start-40&&candidate*1000<end?Math.max(start,candidate*1000):start;
+    seekToWordMs(ms,idx,keepPlaying);
+    finalizeLoadPosition({openPage:opts.openPage});
 
     // Preload mushaf fonts in the background — never block Fatiha→Baqarah handoff.
     const profile = layoutProfile();
@@ -3848,7 +3825,7 @@ async function loadSurah(num, opts) {
       const useV4 = tajweedOn || profile.tajweedForced;
       const edition = profile.pageFont === 'v1' ? 'v1' : (useV4 ? 'v4' : 'v2');
       Promise.all(pages.map(p => ensurePageFont(edition, p))).then(() => {
-        if (currentSurah === num) renderMushafPages();
+        if(request===readerLoadToken&&currentSurah===num&&readerPresentation==='reading'){renderMushafPages();lastScrollKey='';updateHighlight();}
       }).catch(() => {});
     }
 
@@ -3856,9 +3833,8 @@ async function loadSurah(num, opts) {
     loadStatusEl.textContent = meta.nameArabic + ' · ' + VERSES.length + ' ayahs';
     refreshTraditionInfo(num, meta.ayahCount);
   } catch (err) {
-    loadStatusEl.textContent = 'Could not load ' + meta.name + ': ' + err.message;
-    loadStatusEl.classList.add('error');
-  }
+    if(request===readerLoadToken){audio.pause();loadStatusEl.textContent = 'Could not load ' + meta.name + ': ' + err.message;loadStatusEl.classList.add('error');}
+  }finally{if(request===readerLoadToken){readerLoading=false;if(!pendingAudioSeek&&!audio.seeking)updateHighlight();}}
 }
 
 function localSurahEndMs(surahNum) {
@@ -3877,13 +3853,13 @@ async function advanceToNextLocalSurah() {
       const next = nextLocalJuz(currentJuz || 0);
       if (next == null) return false;
       loadStatusEl.textContent = 'Continuing to Juz ' + next + '…';
-      await loadJuz(next, { continuePlayback: true });
+      await loadJuz(next, { continuePlayback: true, keepPlaying:true });
       return true;
     }
     const next = nextLocalSurah(currentSurah);
     if (next == null) return false;
     loadStatusEl.textContent = 'Continuing to surah ' + next + '…';
-    await loadSurah(next, { continuePlayback: true });
+    await loadSurah(next, { continuePlayback: true, keepPlaying:true });
     return true;
   } catch (err) {
     loadStatusEl.textContent = 'Could not continue: ' + err.message;
@@ -3955,21 +3931,10 @@ function refreshTraditionInfo(surahNum, hafsCount) {
 
 let lastScrollKey = '';
 
-function jumpToVerse(idx, autoplay) {
-  if (autoplay === undefined) autoplay = true;
-  currentVerseIdx = idx;
-  lastScrollKey = '';
-  clearHighlights();
-  refreshScrubber(idx);
-  refreshInfoBar(idx);
-  if (isLocalReciter()) {
-    seekVerseStart(idx, autoplay);
-    scrollToPlayback(idx, true);
-    return;
-  }
-  if (autoplay) audio.currentTime = VERSES[idx].source_offset_ms / 1000;
-  scrollToPlayback(idx, true);
-  if (autoplay) audio.play();
+function jumpToVerse(idx, autoplay=true) {
+  if(!VERSES[idx])return;
+  cancelTapWordStop();
+  seekVerseStart(idx,autoplay);
 }
 
 function scrollToPlayback(idx, force) {
@@ -3994,17 +3959,13 @@ function scrollToPlayback(idx, force) {
       document.querySelector('.mushaf-pages .mushaf-glyph' + scope);
   }
   const key = v.surah + ':' + v.ayah + ':' + (activeW != null ? activeW : (force ? 'force' : 'gap'));
-  if (!force && key === lastScrollKey) return;
+  if(!force && key===lastScrollKey && target && target.getBoundingClientRect().top>=0 && target.getBoundingClientRect().bottom<=innerHeight)return;
   // In gaps (no active word), do not scroll at all unless forced (verse jump).
   if (!force && activeW == null) return;
-  lastScrollKey = key;
-  if (!target) return;
+  if(!target)return;
+  lastScrollKey=key;
 
-  const mode = force ? 'keep-up' : followScrollMode;
-  if (mode === 'nearest') {
-    target.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
-    return;
-  }
+  const scrollMode=force?'keep-up':followScrollMode;
 
   // keep-up: if the recited word sits too low (near the fixed player) or
   // off-screen, lift the page so it rests in the upper-middle reading band.
@@ -4017,37 +3978,34 @@ function scrollToPlayback(idx, force) {
   const bottomBand = viewH - controlsH - 28;
   const inComfort = rect.top >= topBand && rect.bottom <= bottomBand;
   if (!force && inComfort) return;
+  if(scrollMode==='nearest'&&rect.top>=topBand&&rect.bottom<=bottomBand)return;
 
   const desiredTop = Math.max(topBand+8,viewH * 0.28);
   const delta = rect.top - desiredTop;
   if (Math.abs(delta) > 10) {
-    window.scrollBy({ top: delta, behavior: force ? 'auto' : 'smooth' });
+    window.scrollBy({top:delta,behavior:force||innerWidth<900?'instant':'smooth'});
   }
 }
 
-function maybeAdvanceLocalAudio() {
-  if (!isLocalReciter() || audio.paused || !VERSES.length || surahAdvanceBusy) return;
-  maybeAdvanceLocalSurahByTime();
-  if (surahAdvanceBusy) return;
-  const ms = audio.currentTime * 1000;
-  const v = VERSES[currentVerseIdx];
-  if (!v) return;
-  if (currentAudioKey && v.audio !== currentAudioKey) return;
-  const endMs = v.source_offset_ms + v.duration_ms;
-  if (ms + 120 < endMs) return;
-  const next = currentVerseIdx + 1;
-  if (next < VERSES.length) {
-    if (VERSES[next].audio !== currentAudioKey) {
-      jumpToVerse(next, true);
-    } else if (ms >= VERSES[next].source_offset_ms) {
-      currentVerseIdx = next;
-      lastScrollKey = '';
-      refreshScrubber(next);
-      refreshInfoBar(next);
-    }
+function readerAdvancePlayback(ended){
+  if(readerLoading||pendingAudioSeek||audio.seeking||surahAdvanceBusy||browsing||tapFrameId)return;
+  const v=VERSES[currentVerseIdx];
+  if(!v||v.audio!==currentAudioKey||!readerAudioMatches(v.audio))return;
+  if(!ended&&audio.currentTime*1000<Number(v.source_offset_ms)+Number(v.duration_ms))return;
+  const next=VERSES[currentVerseIdx+1];
+  if(next){
+    if(ended||next.audio!==v.audio)jumpToVerse(currentVerseIdx+1,true);
     return;
   }
-  advanceToNextLocalSurah();
+  if(isLocalReciter()){
+    const available=browseMode==='juz'?nextLocalJuz(currentJuz||0):nextLocalSurah(currentSurah);
+    if(available==null){audio.pause();return;}
+    audio.pause();
+    advanceToNextLocalSurah();
+  }else if(currentSurah<114){
+    audio.pause();
+    loadSurah(currentSurah+1,{continuePlayback:false,keepPlaying:true});
+  }else audio.pause();
 }
 
 // Word morphology tooltip (root/stem/lemma), from QUSX (github.com/dfordev1/usxv2)
@@ -4165,43 +4123,33 @@ function clearHighlights() {
   document.querySelectorAll('.word.active-word').forEach(el => el.classList.remove('active-word'));
 }
 
-function verseAtMs(ms) {
-  // Local multi-juz surahs use separate opus files — only match verses on the
-  // currently loaded audio key so offsets stay file-relative.
-  const sameFile = (v) => !isLocalReciter() || !currentAudioKey || v.audio === currentAudioKey;
-  // Hysteresis: prefer the current ayah until the next one clearly starts.
-  // Stops flicker at ayah boundaries when timestamps briefly overlap or gap.
-  const cur = VERSES[currentVerseIdx];
-  if (cur && sameFile(cur)) {
-    const next = VERSES[currentVerseIdx + 1];
-    if (next && sameFile(next) && ms >= next.source_offset_ms) {
-      if (ms < next.source_offset_ms + next.duration_ms) return currentVerseIdx + 1;
-    }
-    const curStart = cur.source_offset_ms;
-    const curEnd = curStart + cur.duration_ms;
-    if (ms >= curStart - 40 && ms < curEnd + 80) return currentVerseIdx;
+function readerVerseAtTime(verses,file,ms,preferred=0){
+  if(!file||!Number.isFinite(ms))return -1;
+  const same=v=>v.audio===file;
+  const next=verses[preferred+1];
+  if(next&&same(next)&&ms>=Number(next.source_offset_ms)&&ms<Number(next.source_offset_ms)+Number(next.duration_ms))return preferred+1;
+  const cur=verses[preferred];
+  if(cur&&same(cur)&&ms>=Number(cur.source_offset_ms)&&ms<Number(cur.source_offset_ms)+Number(cur.duration_ms))return preferred;
+  let first=-1,last=-1,best=-1,bestStart=-Infinity;
+  for(let i=0;i<verses.length;i++){
+    const v=verses[i];if(!same(v))continue;
+    if(first<0)first=i;
+    const start=Number(v.source_offset_ms);
+    if(start<=ms){last=i;if(ms<start+Number(v.duration_ms)&&start>=bestStart){best=i;bestStart=start;}}
   }
-  for (let i = 0; i < VERSES.length; i++) {
-    const v = VERSES[i];
-    if (!sameFile(v)) continue;
-    if (ms >= v.source_offset_ms && ms < v.source_offset_ms + v.duration_ms) return i;
-  }
-  // fallback: last verse whose offset has passed (same file)
-  for (let i = VERSES.length - 1; i >= 0; i--) {
-    if (!sameFile(VERSES[i])) continue;
-    if (ms >= VERSES[i].source_offset_ms) return i;
-  }
-  // If nothing on this file matched yet (pre-recitation silence), first same-file verse.
-  for (let i = 0; i < VERSES.length; i++) {
-    if (sameFile(VERSES[i])) return i;
-  }
-  return 0;
+  return best>=0?best:last>=0?last:first;
+}
+function verseAtMs(ms){
+  const idx=readerVerseAtTime(VERSES,currentAudioKey,ms,currentVerseIdx);
+  return idx>=0?idx:currentVerseIdx;
 }
 
 function updateHighlight() {
-  const ms = audio.currentTime * 1000;
-  maybeAdvanceLocalAudio();
-  const idx = verseAtMs(ms);
+  if(readerLoading||pendingAudioSeek||audio.seeking||!currentAudioKey||!readerAudioMatches(currentAudioKey))return;
+  const ms=audio.currentTime*1000;
+  const idx=readerVerseAtTime(VERSES,currentAudioKey,ms,currentVerseIdx);
+  if(idx<0){clearHighlights();return;}
+  const changed=idx!==currentVerseIdx;
   if (idx !== currentVerseIdx) {
     currentVerseIdx = idx;
     lastScrollKey = '';
@@ -4266,7 +4214,8 @@ function updateHighlight() {
       el.classList.remove('active-word');
     }
   });
-  scrollToPlayback(currentVerseIdx);
+  scrollToPlayback(currentVerseIdx,changed&&!audio.paused&&followScrollMode!=='off');
+  if(!audio.paused)readerAdvancePlayback(false);
 }
 
 audio.addEventListener('timeupdate', () => {
@@ -4289,17 +4238,12 @@ audio.addEventListener('pause', () => {
   saveResumeState();
   scheduleChromeConceal();
 });
-audio.addEventListener('ended', () => {
-  playBtn.innerHTML = '&#9658;';
-  saveResumeState();
-  if (!isLocalReciter()) return;
-  // End of a juz opus: either next ayah on another file, or next surah.
-  if (currentVerseIdx < VERSES.length - 1) {
-    jumpToVerse(currentVerseIdx + 1, true);
-  } else {
-    advanceToNextLocalSurah();
-  }
+audio.addEventListener('ended',()=>{
+  playBtn.innerHTML='&#9658;';saveResumeState();readerAdvancePlayback(true);
 });
+audio.addEventListener('seeked',()=>{lastScrollKey='';updateHighlight();});
+audio.addEventListener('playing',()=>{lastScrollKey='';updateHighlight();});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){lastScrollKey='';updateHighlight();}});
 
 window.addEventListener('beforeunload', saveResumeState);
 document.addEventListener('visibilitychange', () => {
@@ -4318,13 +4262,10 @@ nextAyahBtn.addEventListener('click', () => {
 playBtn.addEventListener('click', () => {
   if (audio.paused) {
     if (browsing) exitBrowse();
-    if (isLocalReciter() && VERSES[currentVerseIdx]) {
-      ensureAudioForVerse(currentVerseIdx, true);
-    } else {
-      audio.play().catch(() => {});
-    }
+    if(VERSES[currentVerseIdx])ensureAudioForVerse(currentVerseIdx,true);
   } else {
-    audio.pause();
+    if(pendingAudioSeek)pendingAudioSeek.autoplay=false;
+    cancelTapWordStop();audio.pause();
   }
 });
 
