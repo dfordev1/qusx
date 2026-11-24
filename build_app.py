@@ -1970,8 +1970,17 @@ function seekVerseStart(idx, autoplay) {
 }
 
 // Seek to an absolute ms position in the current (or target) verse's audio file.
+function readerWordTapTarget(v,wIdx,verses){
+  const idx=verses.indexOf(v);
+  if(idx<0||!Number.isInteger(wIdx)||wIdx<1||wIdx>(v.qusxWords||[]).length)return null;
+  const rows=(v.words||[]).filter(w=>w[0]===wIdx&&readerContainsTime(v,Number(v.source_offset_ms)+Number(w[1]))).sort((a,b)=>a[1]-b[1]);
+  return {idx,ms:v.alignmentVerified!==false&&rows.length?Number(v.source_offset_ms)+Number(rows[0][1]):Number(v.source_offset_ms)};
+}
 function handleWordTap(v, wIdx, verseIdx, absStart) {
   if(readerLoading)return;
+  const target=readerWordTapTarget(v,wIdx,VERSES);
+  if(!target)return;
+  verseIdx=target.idx;absStart=target.ms;
   cancelTapWordStop();
   if (!tapWordMode) {
     seekToWordMs(absStart, verseIdx, true);
@@ -3703,13 +3712,15 @@ function buildLocalVerse(r, metaA, surahNumForBismillah) {
   const qusxWords = metaA.words;
   const sMeta = SURAH_INDEX.find(s => s.num === (surahNumForBismillah || r.surah));
   const bismillahPre = !!(sMeta && sMeta.bismillahPre);
-  const remapped=readerAlignTiming(r,qusxWords,bismillahPre&&r.ayah===1&&r.surah!==1);
+  const allowBasmalah=bismillahPre&&r.ayah===1&&r.surah!==1;
+  const textMatches=!!readerWordMapping(qusxWords,r.text_uthmani||r.text,allowBasmalah);
+  const remapped=readerAlignTiming(r,qusxWords,allowBasmalah);
   return {
     surah: r.surah,
     ayah: r.ayah,
     text: metaA.text || qusxWords.join(' '),
     qusxWords,
-    audio: readerValidSpan(r.source_offset_ms,r.duration_ms)?r.audio:null,
+    audio: textMatches&&readerValidSpan(r.source_offset_ms,r.duration_ms)?r.audio:null,
     duration_ms: remapped.duration_ms,
     source_offset_ms: remapped.source_offset_ms,
     words: repairWordTimestamps(remapped.words),
@@ -4312,10 +4323,12 @@ function clearHighlights() {
 function readerVerseAtTime(verses,file,ms,preferred=0){
   if(!file||!Number.isFinite(ms))return -1;
   const same=v=>v&&v.audio===file&&readerValidSpan(v.source_offset_ms,v.duration_ms);
-  const next=verses[preferred+1];
-  if(next&&same(next)&&ms>=Number(next.source_offset_ms)&&ms<Number(next.source_offset_ms)+Number(next.duration_ms))return preferred+1;
+  // A confirmed explicit seek owns its selected ayah while its span contains the clock.
+  // Do not jump to the next ayah just because the manifest spans overlap.
   const cur=verses[preferred];
-  if(cur&&same(cur)&&ms>=Number(cur.source_offset_ms)&&ms<Number(cur.source_offset_ms)+Number(cur.duration_ms))return preferred;
+  if(cur&&same(cur)&&readerContainsTime(cur,ms))return preferred;
+  const next=verses[preferred+1];
+  if(next&&same(next)&&readerContainsTime(next,ms))return preferred+1;
   let best=-1,bestStart=-Infinity;
   for(let i=0;i<verses.length;i++){
     const v=verses[i];if(!same(v))continue;
@@ -4427,12 +4440,12 @@ document.addEventListener('visibilitychange', () => {
 prevAyahBtn.addEventListener('click', () => {
   if(readerLoading)return;
   revealPlaybackChrome();
-  if (currentVerseIdx > 0) jumpToVerse(currentVerseIdx - 1, !audio.paused);
+  if (currentVerseIdx > 0) jumpToVerse(currentVerseIdx - 1, pendingAudioSeek?.autoplay??!audio.paused);
 });
 nextAyahBtn.addEventListener('click', () => {
   if(readerLoading)return;
   revealPlaybackChrome();
-  if (currentVerseIdx < VERSES.length - 1) jumpToVerse(currentVerseIdx + 1, !audio.paused);
+  if (currentVerseIdx < VERSES.length - 1) jumpToVerse(currentVerseIdx + 1, pendingAudioSeek?.autoplay??!audio.paused);
 });
 
 playBtn.addEventListener('click', () => {
