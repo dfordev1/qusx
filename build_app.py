@@ -2014,15 +2014,14 @@ function handleWordTap(v, wIdx, verseIdx, absStart) {
   const rowIndex = rows.findIndex(row => row[0] === wIdx);
   const row = rowIndex >= 0 ? rows[rowIndex] : null;
   if(!row||v.alignmentVerified===false||!readerContainsTime(v,absStart)){seekVerseStart(verseIdx,true);return;}
-  const startRel = row ? row[1] : Math.max(0, absStart - v.source_offset_ms);
-  const nextStart = rowIndex >= 0 && rows[rowIndex + 1] ? rows[rowIndex + 1][1] : null;
-  let endRel = row && row[2] > startRel ? row[2] : (nextStart != null ? nextStart : startRel + 450);
-  if (nextStart != null) endRel = Math.min(endRel, nextStart);
-  const absEnd = v.source_offset_ms + Math.max(startRel + 45, endRel);
-  // Stop a few milliseconds inside the boundary to absorb output-buffer latency.
-  const stopAt = Math.max(absStart + 35, absEnd - 20);
-  const token = tapPlaybackToken;
+  const nextStart = rows[rowIndex + 1]?.[1];
+  const endRel = Math.min(row[2], nextStart ?? row[2]);
+  playMeasuredInterval(v, verseIdx, absStart, Number(v.source_offset_ms) + endRel);
+}
 
+function playMeasuredInterval(v, verseIdx, absStart, stopAt) {
+  cancelTapWordStop();
+  const token = tapPlaybackToken;
   seekToWordMs(absStart, verseIdx, true);
   const watchFrame = () => {
     if (token !== tapPlaybackToken) return;
@@ -2044,6 +2043,7 @@ function seekToWordMs(absMs,verseIdx,autoplay){
   cancelPendingAudioSeek();
   if(!v.audio||!readerValidSpan(v.source_offset_ms,v.duration_ms)){audio.pause();currentAudioKey=null;currentVerseIdx=verseIdx;clearHighlights();refreshScrubber(verseIdx);refreshInfoBar(verseIdx);scrollToPlayback(verseIdx,true);loadStatusEl.textContent='No aligned audio for '+v.surah+':'+v.ayah+' in this reciter.';loadStatusEl.classList.add('error');return;}
   if(!readerContainsTime(v,absMs))absMs=Number(v.source_offset_ms);
+  readerVisualIdx=verseIdx;readerVisualSeekFloor=absMs;
   const token=audioSeekToken,request={token,verse:v,idx:verseIdx,ms:absMs,autoplay:!!autoplay};
   pendingAudioSeek=request;
   currentVerseIdx=verseIdx;lastScrollKey='';clearHighlights();
@@ -2297,6 +2297,8 @@ function cancelTapWordStop() {
 }
 let tajweedOn = false; // Mushaf-mode-only: colored tajweed rules via QCF V4
 let currentVerseIdx = 0;
+// Transport and delayed visual position are independent.
+let readerVisualIdx=-1,readerVisualSeekFloor=-Infinity;
 let userSeeking = false;
 
 const versesEl = document.getElementById('verses');
@@ -3485,15 +3487,16 @@ function refreshScrubber(idx) {
   if (active) active.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
 }
 const infoMeta = document.getElementById('infoMeta');
-function refreshInfoBar(idx) {
+function refreshInfoBar(idx,visualOnly=false) {
   const v = VERSES[idx];
   if (!v) return;
-  currentSurah = v.surah;
+  if(!visualOnly)currentSurah = v.surah;
   const s = SURAH_INDEX.find(x => x.num === v.surah);
   const place = s && s.revelationPlace ? (s.revelationPlace === 'makkah' ? 'Makkan' : 'Madinan') : null;
   let text = (browseMode === 'juz' ? ('Juz ' + (currentJuz || v.localJuz || '') + ' · ') : '')
     + (s ? s.name : v.surah) + ' ' + v.ayah;
   if (place) text += ' · ' + place;
+  if(v.letterTimingApproximate&&mode==='letter')text+=' · Word timing only';
   infoMeta.textContent = text;
   readerSync(idx);
   readerUpdatePlayButtons();
@@ -3571,7 +3574,7 @@ function readerAlignTiming(row,canonical,allowBasmalah){
     const w=mapping.map.get(id);if(!w)return empty;
     words.push([w,s,e]);
   }
-  if(!words.length||new Set(words.map(w=>w[0])).size!==canonical.length)return empty;
+  if(!words.length||new Set(words.filter(w=>w[2]>w[1]).map(w=>w[0])).size!==canonical.length)return empty;
   const input=row.letter_timestamps||{},letters={word_idx:[],start_ms:[],end_ms:[]};
   for(let i=0;i<(input.word_idx||[]).length;i++){
     const w=mapping.map.get(Number(input.word_idx[i])),s=Number(input.start_ms?.[i]),e=Number(input.end_ms?.[i]);
@@ -3744,6 +3747,7 @@ function buildLocalVerse(r, metaA, surahNumForBismillah) {
     fragments: metaA.fragments || {},
     wordLines: metaA.wordLines || [], wordPages: metaA.wordPages || [],
     localJuz: r.juz,
+    letterTimingApproximate:true,
   };
 }
 
@@ -4350,6 +4354,12 @@ function readerVerseAtTime(verses,file,ms,preferred=0){
   }
   return best;
 }
+function readerVisualVerseAtTime(verses,file,visualMs,preferred,seekFloor){
+  // Never show words before an explicit seek. During normal playback the
+  // delayed clock may still belong to the preceding ayah on the same track.
+  if(visualMs<seekFloor)return -1;
+  return readerVerseAtTime(verses,file,visualMs,preferred);
+}
 function verseAtMs(ms){
   const idx=readerVerseAtTime(VERSES,currentAudioKey,ms,currentVerseIdx);
   return idx>=0?idx:currentVerseIdx;
@@ -4359,23 +4369,22 @@ function updateHighlight() {
   if(readerLoading||pendingAudioSeek||audio.seeking||!currentAudioKey||!readerAudioMatches(currentAudioKey)||loadStatusEl.classList.contains('error'))return;
   const ms=audio.currentTime*1000;
   const idx=readerVerseAtTime(VERSES,currentAudioKey,ms,currentVerseIdx);
-  if(idx<0){clearHighlights();if(!audio.paused)readerAdvancePlayback(false);return;}
-  const changed=idx!==currentVerseIdx;
-  if (idx !== currentVerseIdx) {
-    currentVerseIdx = idx;
-    lastScrollKey = '';
-    clearHighlights();
-    refreshScrubber(idx);
-    refreshInfoBar(idx);
-    syncPageToVerse(idx);
+  if(idx>=0&&idx!==currentVerseIdx){
+    currentVerseIdx=idx;
+    currentSurah=VERSES[idx].surah;
+    readerUpdatePlayButtons();
   }
-
-  const v = VERSES[currentVerseIdx];
-  if (!v) return;
-
   const visualMs=readerHighlightTimeMs();
+  const visualIdx=readerVisualVerseAtTime(VERSES,currentAudioKey,visualMs,readerVisualIdx,readerVisualSeekFloor);
+  if(visualIdx<0){clearHighlights();if(!audio.paused)readerAdvancePlayback(false);return;}
+  const changed=visualIdx!==readerVisualIdx;
+  if(changed){
+    readerVisualIdx=visualIdx;lastScrollKey='';clearHighlights();
+    refreshScrubber(visualIdx);refreshInfoBar(visualIdx,true);
+  }
+  const v=VERSES[visualIdx];if(!v)return;
   const activeWord=activeWordAtMs(v,visualMs);
-  syncPageToVerse(currentVerseIdx);
+  syncPageToVerse(visualIdx);
   const scope = verseDomScope(v);
 
   // Timed basmalah header (local Al-Hadr, surahs with bismillahPre).
@@ -4414,7 +4423,7 @@ function updateHighlight() {
       el.classList.remove('active-word','active-ayah');
     }
   });
-  scrollToPlayback(currentVerseIdx,changed&&!audio.paused&&followScrollMode!=='off');
+  scrollToPlayback(visualIdx,changed&&!audio.paused&&followScrollMode!=='off');
   if(!audio.paused)readerAdvancePlayback(false);
 }
 
@@ -4681,7 +4690,7 @@ function showBrowseLetter(gidx) {
   browseLetterEl.textContent = L.char;
   browseMetaEl.textContent = L.verse.surah + ':' + L.verse.ayah + ' — letter ' + (browseIdx + 1) + ' / ' + flatLetters.length;
 
-  jumpToVerse(L.verseIdx, /*autoplay*/ false);
+  playMeasuredInterval(L.verse, L.verseIdx, L.startMs, L.endMs);
   clearHighlights();
   const cell = document.querySelector('.letter[data-gidx="' + browseIdx + '"]');
   if (cell) {
@@ -4694,16 +4703,7 @@ function showBrowseLetter(gidx) {
     }
   }
 
-  audio.currentTime = L.startMs / 1000;
-  audio.play();
-  const stopAt = L.endMs;
-  const onTick = () => {
-    if (audio.currentTime * 1000 >= stopAt) {
-      audio.pause();
-      audio.removeEventListener('timeupdate', onTick);
-    }
-  };
-  audio.addEventListener('timeupdate', onTick);
+
 }
 document.getElementById('browsePrev').addEventListener('click', () => showBrowseLetter(browseIdx - 1));
 document.getElementById('browseNext').addEventListener('click', () => showBrowseLetter(browseIdx + 1));
@@ -4973,7 +4973,7 @@ seek.addEventListener('click', () => { if (browsing) exitBrowse(); });
   }
   function readerHighlightCurrentLetter(v,activeWord,ms){
     readerClearLetterRange();
-    if(mode!=='letter'||activeWord==null)return;
+    if(mode!=='letter'||activeWord==null||v.letterTimingApproximate)return;
     const word=mushafPagesEl.querySelector('.word'+verseDomScope(v)+'[data-word="'+activeWord+'"]');
     if(!word)return;
     const ranges=readerLetterRanges.get(word)||[];
