@@ -1802,15 +1802,23 @@ function applyLocalAlhadrAvailability() {
 // Optional manifest.audioBase (Internet Archive) rewrites relative juz paths
 // to absolute URLs so GitHub Pages can run Al-Hadr without shipping audio.
 // Set preferLocalAudio: true in the manifest to keep relative paths for offline.
+// Juz 1–3 MP3 files were independently downloaded and probed in audit run
+// 45358930585. Their durations match the manifest within 0.0005 seconds.
+// Prefer those browser-compatible recordings; leave unaudited tracks unchanged.
+function readerAuditedAudioUrl(url,base){
+  const auditedBase='https://archive.org/download/quran-al-hadr-recitation/juz';
+  if(base!==auditedBase||typeof url!=='string'||!url.startsWith(auditedBase+'/'))return url;
+  return url.replace(/\/juz-(0[123])\.(ogg|opus)$/i,'/juz-$1.mp3');
+}
 function normalizeLocalManifest(m) {
   const base = (m.audioBase || '').replace(/\/$/, '');
   m._remoteAudioBase = base || '';
   const preferLocal = m.preferLocalAudio === true;
   if (!base || preferLocal) return m;
   const fix = (p) => {
-    if (!p || /^https?:\/\//i.test(p)) return p;
-    const name = p.split('/').pop();
-    return base + '/' + name;
+    if (!p) return p;
+    const url=/^https?:\/\//i.test(p)?p:base+'/'+p.split('/').pop();
+    return readerAuditedAudioUrl(url,base);
   };
   for (const t of (m.tracks || [])) t.audio = fix(t.audio);
   for (const sn of Object.keys(m.surahs || {})) {
@@ -1820,7 +1828,7 @@ function normalizeLocalManifest(m) {
 }
 
 // Archive.org ships ogg for juz 1–21 and 23, but juz 22 and 25–30 are opus-only.
-const AUDIO_EXT_FALLBACKS = ['.ogg', '.opus', '.mp3'];
+const AUDIO_EXT_FALLBACKS = ['.mp3', '.ogg', '.opus'];
 
 function audioBasename(path) {
   if (!path) return null;
@@ -1864,9 +1872,10 @@ function nextAudioFallback(failedUrl, triedSet) {
   return null;
 }
 
-function readerLocalDurationIssue(expected,actual){
+function readerLocalDurationIssue(expected,actual,requiredEnd=0){
   if(!Number.isFinite(expected)||expected<=0)return 'Missing expected recording duration';
   if(!Number.isFinite(actual)||actual<=0)return 'Recording duration unavailable';
+  if(Number.isFinite(requiredEnd)&&requiredEnd>actual+.075)return 'Recording ends before the requested ayah (required '+requiredEnd.toFixed(2)+'s, received '+actual.toFixed(2)+'s)';
   if(Math.abs(expected-actual)>Math.max(2,expected*.005))return 'Al-Hadr duration mismatch (expected '+expected.toFixed(2)+'s, received '+actual.toFixed(2)+'s)';
   return null;
 }
@@ -1978,7 +1987,7 @@ function seekToWordMs(absMs,verseIdx,autoplay){
   const cleanup=()=>{
     clearTimeout(timer);audio.removeEventListener('loadedmetadata',apply);
     audio.removeEventListener('durationchange',apply);audio.removeEventListener('canplay',apply);
-    audio.removeEventListener('seeked',verify);audio.removeEventListener('canplay',verify);
+    audio.removeEventListener('seeked',verify);audio.removeEventListener('canplay',verify);audio.removeEventListener('durationchange',verify);
   };
   request.cleanup=cleanup;
   const fail=message=>{
@@ -1988,6 +1997,11 @@ function seekToWordMs(absMs,verseIdx,autoplay){
   };
   const verify=()=>{
     if(!current()||!request.seekIssued||audio.seeking||!readerAudioMatches(v.audio))return;
+    if(!v.clipRelative&&isLocalReciter()){
+      const track=LOCAL_MANIFEST?.tracks?.find(t=>Number(t.juz)===Number(v.localJuz));
+      const issue=readerLocalDurationIssue(Number(track?.durationSeconds),audio.duration,(Number(v.source_offset_ms)+Number(v.duration_ms))/1000);
+      if(issue){if(audio.readyState<3)return;if(readerRetryLocalAudio(v,verseIdx,absMs,request.autoplay,issue))return;fail(issue+'. No matching format available. Recitation stopped.');return;}
+    }
     if(Math.abs(audio.currentTime-absMs/1000)>.075||!readerContainsTime(v,audio.currentTime*1000))return;
     cleanup();pendingAudioSeek=null;currentVerseIdx=verseIdx;
     loadStatusEl.classList.remove('error');
@@ -2002,7 +2016,7 @@ function seekToWordMs(absMs,verseIdx,autoplay){
     if(!v.clipRelative&&isLocalReciter()){
       const track=LOCAL_MANIFEST?.tracks?.find(t=>Number(t.juz)===Number(v.localJuz));
       const expected=Number(track?.durationSeconds);
-      const issue=readerLocalDurationIssue(expected,duration);
+      const issue=readerLocalDurationIssue(expected,duration,(Number(v.source_offset_ms)+Number(v.duration_ms))/1000);
       if(issue){
         // Streaming metadata can be provisional until the browser has buffered media.
         if(audio.readyState<3)return;
@@ -2021,7 +2035,7 @@ function seekToWordMs(absMs,verseIdx,autoplay){
   const timer=setTimeout(()=>{
     if(!current())return;
     const track=LOCAL_MANIFEST?.tracks?.find(t=>Number(t.juz)===Number(v.localJuz));
-    const issue=!v.clipRelative&&isLocalReciter()?readerLocalDurationIssue(Number(track?.durationSeconds),audio.duration):null;
+    const issue=!v.clipRelative&&isLocalReciter()?readerLocalDurationIssue(Number(track?.durationSeconds),audio.duration,(Number(v.source_offset_ms)+Number(v.duration_ms))/1000):null;
     if(!v.clipRelative&&isLocalReciter()&&readerRetryLocalAudio(v,verseIdx,absMs,request.autoplay,issue||'Could not confirm audio position'))return;
     fail(issue?issue+'. No matching format available. Recitation stopped.':'Could not confirm the audio position. Tap Play to retry.');
   },15000);
@@ -2029,7 +2043,7 @@ function seekToWordMs(absMs,verseIdx,autoplay){
   audio.addEventListener('durationchange',apply);
   audio.addEventListener('canplay',apply);
   audio.addEventListener('seeked',verify);
-  audio.addEventListener('canplay',verify);
+  audio.addEventListener('canplay',verify);audio.addEventListener('durationchange',verify);
   if(!ready){
     if(currentAudioKey!==v.audio)audio.dataset.audioTriedUrls='';
     currentAudioKey=v.audio;
