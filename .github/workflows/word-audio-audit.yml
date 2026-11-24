@@ -1,0 +1,26 @@
+name: Word audio alignment audit
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tests/audit-word-audio.py'
+      - 'build_app.py'
+      - 'index.html'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node tests/timing-regression.cjs
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: python3 tests/audit-word-audio.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: actual-ayah-80-word-clips
+          path: word-audio-audit/
