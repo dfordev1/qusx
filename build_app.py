@@ -3494,6 +3494,7 @@ function refreshInfoBar(idx) {
   let text = (browseMode === 'juz' ? ('Juz ' + (currentJuz || v.localJuz || '') + ' · ') : '')
     + (s ? s.name : v.surah) + ' ' + v.ayah;
   if (place) text += ' · ' + place;
+  if(v.timingIssue&&v.audio)text+=' · Ayah-only: '+v.timingIssue;
   infoMeta.textContent = text;
   readerSync(idx);
   readerUpdatePlayButtons();
@@ -3720,6 +3721,18 @@ function repairWordTimestamps(words) {
   return [...(words||[])].sort((a,b)=>a[1]-b[1]||a[0]-b[0]);
 }
 
+// Local FastConformer labels are estimates, not a reviewed acoustic ground truth.
+function readerLocalTimingIssue(row){
+  if(row.status!=='aligned')return 'Source alignment needs review';
+  if(!Array.isArray(row.word_timestamps)||!row.word_timestamps.length)return 'Missing word timing';
+  const raw=String(row.text_uthmani||row.text||'').trim().split(/\s+/);
+  for(const [id,s,e] of row.word_timestamps){
+    const length=(raw[id-1]||'').normalize('NFKD').replace(/\p{M}/gu,'').replace(/[^\p{L}]/gu,'').length;
+    const duration=Number(e)-Number(s);
+    if(!Number.isFinite(duration)||duration<=0||(length>=4&&duration<=80))return 'Suspicious word duration';
+  }
+  return null;
+}
 function buildLocalVerse(r, metaA, surahNumForBismillah) {
   if(!Array.isArray(metaA.words)||!metaA.words.length)throw Error('Missing canonical text for '+r.surah+':'+r.ayah);
   const qusxWords = metaA.words;
@@ -3728,6 +3741,7 @@ function buildLocalVerse(r, metaA, surahNumForBismillah) {
   const allowBasmalah=bismillahPre&&r.ayah===1&&r.surah!==1;
   const textMatches=!!readerWordMapping(qusxWords,r.text_uthmani||r.text,allowBasmalah);
   const remapped=readerAlignTiming(r,qusxWords,allowBasmalah);
+  const timingIssue=readerLocalTimingIssue(r)||(!remapped.alignmentVerified?'Word mapping unavailable':null);
   return {
     surah: r.surah,
     ayah: r.ayah,
@@ -3736,10 +3750,11 @@ function buildLocalVerse(r, metaA, surahNumForBismillah) {
     audio: textMatches&&readerValidSpan(r.source_offset_ms,r.duration_ms)?r.audio:null,
     duration_ms: remapped.duration_ms,
     source_offset_ms: remapped.source_offset_ms,
-    words: repairWordTimestamps(remapped.words),
-    letters: remapped.letters,
-    basmalahWords: remapped.basmalahWords,
-    alignmentVerified:remapped.alignmentVerified,
+    words: timingIssue?[]:repairWordTimestamps(remapped.words),
+    letters: {word_idx:[],start_ms:[],end_ms:[]}, // source letters are evenly synthesized
+    basmalahWords: timingIssue?null:remapped.basmalahWords,
+    alignmentVerified:!timingIssue,
+    timingIssue,
     juz: metaA.juz, hizb: metaA.hizb, rub: metaA.rub, manzil: metaA.manzil, page: metaA.page, ruku: metaA.ruku, sajda: metaA.sajda,
     fragments: metaA.fragments || {},
     wordLines: metaA.wordLines || [], wordPages: metaA.wordPages || [],
@@ -4973,7 +4988,7 @@ seek.addEventListener('click', () => { if (browsing) exitBrowse(); });
   }
   function readerHighlightCurrentLetter(v,activeWord,ms){
     readerClearLetterRange();
-    if(mode!=='letter'||activeWord==null)return;
+    if(mode!=='letter'||activeWord==null||v.localJuz!=null)return;
     const word=mushafPagesEl.querySelector('.word'+verseDomScope(v)+'[data-word="'+activeWord+'"]');
     if(!word)return;
     const ranges=readerLetterRanges.get(word)||[];
