@@ -1976,15 +1976,14 @@ function handleWordTap(v, wIdx, verseIdx, absStart) {
   const rowIndex = rows.findIndex(row => row[0] === wIdx);
   const row = rowIndex >= 0 ? rows[rowIndex] : null;
   if(!row||v.alignmentVerified===false||!readerContainsTime(v,absStart)){seekVerseStart(verseIdx,true);return;}
-  const startRel = row ? row[1] : Math.max(0, absStart - v.source_offset_ms);
-  const nextStart = rowIndex >= 0 && rows[rowIndex + 1] ? rows[rowIndex + 1][1] : null;
-  let endRel = row && row[2] > startRel ? row[2] : (nextStart != null ? nextStart : startRel + 450);
-  if (nextStart != null) endRel = Math.min(endRel, nextStart);
-  const absEnd = v.source_offset_ms + Math.max(startRel + 45, endRel);
-  // Stop a few milliseconds inside the boundary to absorb output-buffer latency.
-  const stopAt = Math.max(absStart + 35, absEnd - 20);
-  const token = tapPlaybackToken;
+  const nextStart = rows[rowIndex + 1]?.[1];
+  const endRel = Math.min(row[2], nextStart ?? row[2]);
+  playMeasuredInterval(v, verseIdx, absStart, Number(v.source_offset_ms) + endRel);
+}
 
+function playMeasuredInterval(v, verseIdx, absStart, stopAt) {
+  cancelTapWordStop();
+  const token = tapPlaybackToken;
   seekToWordMs(absStart, verseIdx, true);
   const watchFrame = () => {
     if (token !== tapPlaybackToken) return;
@@ -4653,7 +4652,7 @@ function showBrowseLetter(gidx) {
   browseLetterEl.textContent = L.char;
   browseMetaEl.textContent = L.verse.surah + ':' + L.verse.ayah + ' — letter ' + (browseIdx + 1) + ' / ' + flatLetters.length;
 
-  jumpToVerse(L.verseIdx, /*autoplay*/ false);
+  playMeasuredInterval(L.verse, L.verseIdx, L.startMs, L.endMs);
   clearHighlights();
   const cell = document.querySelector('.letter[data-gidx="' + browseIdx + '"]');
   if (cell) {
@@ -4666,16 +4665,7 @@ function showBrowseLetter(gidx) {
     }
   }
 
-  audio.currentTime = L.startMs / 1000;
-  audio.play();
-  const stopAt = L.endMs;
-  const onTick = () => {
-    if (audio.currentTime * 1000 >= stopAt) {
-      audio.pause();
-      audio.removeEventListener('timeupdate', onTick);
-    }
-  };
-  audio.addEventListener('timeupdate', onTick);
+
 }
 document.getElementById('browsePrev').addEventListener('click', () => showBrowseLetter(browseIdx - 1));
 document.getElementById('browseNext').addEventListener('click', () => showBrowseLetter(browseIdx + 1));
