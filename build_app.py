@@ -1431,6 +1431,59 @@ html = """<!DOCTYPE html>
   }
   @media(max-width:420px){#readerHeader .brand{display:none}.controls .info-bar{display:none}.reader-mode-tools select{max-width:80px}}
 
+
+  /* Mobile overlap: never squeeze a word's layout box below its ink width. */
+  :root { --reader-top-inset: 116px; --reader-bottom-inset: 100px; }
+  html { scroll-padding-top:calc(var(--reader-top-inset) + 12px); scroll-padding-bottom:calc(var(--reader-bottom-inset) + 16px); }
+  body { padding-bottom:calc(var(--reader-bottom-inset) + 24px); }
+  .mushaf-pages,.mushaf-page,.mushaf-text,.qv,.qv-content { min-width:0; max-width:100%; }
+  .mushaf-text { line-height:max(var(--reader-leading),1.65); }
+  .mushaf-text.with-letters,.mushaf-text.is-nastaleeq { line-height:max(var(--reader-leading),1.85); }
+  .mushaf-text.is-nastaleeq { line-height:max(var(--reader-leading),2.1); }
+  .mushaf-line { gap:.12em; padding-block:.24em; }
+  .mushaf-line.is-short { gap:.35em; }
+  .mushaf-line > .word,.mushaf-line > .mushaf-num-glyph,.mushaf-line > .ayah-pin,.mushaf-line > .sajda-badge {
+    flex:0 0 auto; min-width:max-content; white-space:nowrap;
+  }
+  .mushaf-line > .bismillah { flex:1 1 100%; min-width:0; }
+  .qv-arabic { line-height:max(var(--reader-leading),2.05); overflow-wrap:normal; word-break:normal; padding:.22em .12em .35em; }
+  .qv-arabic .word { white-space:nowrap; max-width:none; overflow:visible; padding-inline:.025em; }
+  .qv-gloss { min-width:0; max-width:none; margin-inline:.08em; }
+  .qv-gloss button { max-width:min(145px,40vw); overflow-wrap:break-word; }
+  .qv-arabic .ayah-pin { white-space:nowrap; vertical-align:baseline; }
+  #readerModeBar [hidden] { display:none!important; }
+  .reader-mode-tools { min-width:0; }
+  @media(max-width:899px) {
+    :root { --reader-top-inset:56px; }
+    #readerHeader { max-width:100vw; }
+    #readerModeBar { position:static; flex-wrap:wrap; justify-content:space-between; gap:8px; padding:8px 0; }
+    .reader-mode-tools { flex-wrap:wrap; justify-content:flex-end; gap:4px; }
+    .reader-mode-tools .experience-toggle { display:flex; width:auto; }
+    .reader-mode-tools .experience-toggle button { padding:5px 7px; }
+    .reader-mode-switch { flex:0 0 auto; }
+    .reader-mode-tools button { white-space:nowrap; }
+    body { padding-left:12px; padding-right:12px; }
+    body:not(.reader-translation) .mushaf-page { padding:10px 4px 18px; }
+    .qv { padding:18px 0; }
+    .qv-arabic { font-size:min(var(--reader-size),max(20px,8.5vw)); line-height:max(var(--reader-leading),2.15); overflow-x:auto; overflow-y:visible; }
+    .qv-gloss { margin-bottom:12px; }
+    .controls { padding:8px 10px calc(8px + env(safe-area-inset-bottom,0px)); }
+    .controls-row { min-width:0; }
+    .controls #seek { min-width:0; width:100%; margin:0; }
+    .word-inspector { bottom:calc(var(--reader-bottom-inset) + 10px); max-height:calc(100dvh - var(--reader-top-inset) - var(--reader-bottom-inset) - 24px); overflow:auto; }
+  }
+  @media(max-width:480px) {
+    .reader-mode-tools { flex:1 1 100%; justify-content:flex-start; }
+    .reader-mode-tools .experience-toggle { margin-left:auto; }
+    .controls .controls-row { display:grid; grid-template-columns: minmax(0,1fr) 30px 36px 30px minmax(0,1fr); grid-template-areas:"speed prev play next spare" "start seek seek seek end"; gap:5px 8px; }
+    .controls .info-bar { display:none; }
+    #prevAyahBtn{grid-area:prev} #playBtn{grid-area:play;justify-self:center} #nextAyahBtn{grid-area:next}
+    #speedSelect{grid-area:speed;justify-self:start;max-width:100%}
+    #curTime{grid-area:start;min-width:0} #seek{grid-area:seek} #totTime{grid-area:end;min-width:0}
+    #readerHeading .reader-actions { flex-wrap:wrap; }
+    .reader-mode-tools select { max-width:100px; }
+  }
+
 </style>
 </head>
 <body>
@@ -1639,6 +1692,7 @@ async function ensurePageFont(edition, page) {
     const font = new FontFace(QCF_FAMILY_PREFIX[edition] + page, 'url(' + QCF_FONT_URL[edition](page) + ')');
     await font.load();
     document.fonts.add(font);
+    requestAnimationFrame(markShortMushafLines);
   } catch (e) {
     // Offline/blocked — mushaf falls back to tofu for that page's PUA codes.
   }
@@ -2129,6 +2183,7 @@ function applyTypography() {
   if (textSizeNumber) textSizeNumber.value = String(textSize);
   if (lineHeightRange) lineHeightRange.value = String(lineHeight);
   if (lineHeightValue) lineHeightValue.textContent = lineHeight.toFixed(2);
+  requestAnimationFrame(markShortMushafLines);
 }
 function saveTypography() {
   localStorage.setItem('quran-text-size-px', String(textSize));
@@ -2250,6 +2305,7 @@ function showMushafPage(i) {
   currentPageIdx = Math.max(0, Math.min(i, mushafPageCount - 1));
   pages.forEach((p, pi) => p.classList.toggle('is-visible', pageViewMode !== 'page' || pi === currentPageIdx));
   const visible = pages[currentPageIdx];
+  requestAnimationFrame(markShortMushafLines);
   const pageNum = visible && visible.dataset.pageNum ? visible.dataset.pageNum : (currentPageIdx + 1);
   if (pageLabelEl) {
     pageLabelEl.textContent = mushafPageCount > 1
@@ -3122,19 +3178,49 @@ function renderMushafPages() {
   requestAnimationFrame(() => requestAnimationFrame(markShortMushafLines));
 }
 
+
+function readerFitScale(available,required) {
+  return available>0&&required>0?Math.min(1,available/required):1;
+}
 function markShortMushafLines() {
-  // Only leave natural width for single-token lines (e.g. a lone ayah pin).
-  // Every real mushaf line with 2+ glyphs is edge-to-edge; CSS space-between
-  // is the closest we can get without kashida shaping.
-  mushafPagesEl.querySelectorAll('.mushaf-line').forEach(line => {
-    line.classList.toggle('is-short', line.children.length < 2);
-  });
+  // Measure at the requested type size, not at a previously reduced size.
+  // Scale an entire printed page uniformly; never wrap/reorder its lines.
+  const pages=[...mushafPagesEl.querySelectorAll('.mushaf-text')].filter(page=>page.getBoundingClientRect().width>0);
+  for(const page of pages)page.style.removeProperty('font-size');
+  for(const page of pages){
+    const base=parseFloat(getComputedStyle(page).fontSize);
+    let factor=1;
+    for(const line of page.querySelectorAll('.mushaf-line')){
+      line.classList.toggle('is-short',line.children.length<2);
+      if(line.querySelector(':scope > .bismillah'))continue;
+      const children=[...line.children];
+      if(!children.length)continue;
+      const gap=parseFloat(getComputedStyle(line).columnGap)||0;
+      const width=children.reduce((sum,child)=>{
+        const style=getComputedStyle(child);
+        return sum+child.getBoundingClientRect().width+(parseFloat(style.marginLeft)||0)+(parseFloat(style.marginRight)||0);
+      },0)+gap*Math.max(0,children.length-1);
+      // Leave a little room for script glyphs that extend beyond their advance.
+      factor=Math.min(factor,readerFitScale(Math.max(1,line.clientWidth-6),width));
+    }
+    if(factor<1&&base>0)page.style.fontSize=(Math.floor(base*factor*10)/10)+'px';
+  }
+}
+function syncReaderChromeInsets(){
+  const header=document.getElementById('readerHeader');
+  const bar=document.getElementById('readerModeBar');
+  const player=document.querySelector('.controls');
+  const sticky=bar&&getComputedStyle(bar).position==='sticky';
+  const top=(header?.getBoundingClientRect().height||56)+(sticky?bar.getBoundingClientRect().height:0);
+  const bottom=player?.getBoundingClientRect().height||0;
+  document.documentElement.style.setProperty('--reader-top-inset',Math.ceil(top)+'px');
+  document.documentElement.style.setProperty('--reader-bottom-inset',Math.ceil(bottom)+'px');
 }
 
 let mushafJustifyTimer = null;
 window.addEventListener('resize', () => {
   clearTimeout(mushafJustifyTimer);
-  mushafJustifyTimer = setTimeout(markShortMushafLines, 120);
+  mushafJustifyTimer = setTimeout(()=>{syncReaderChromeInsets();markShortMushafLines();},120);
 });
 
 const scrubberEl = document.getElementById('scrubber');
@@ -3940,12 +4026,13 @@ function scrollToPlayback(idx, force) {
   const viewH = window.innerHeight || document.documentElement.clientHeight;
   const controlsEl = document.querySelector('.controls');
   const controlsH = controlsEl ? controlsEl.getBoundingClientRect().height : 110;
-  const topBand = viewH * 0.16;
+  const topInset=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--reader-top-inset'))||56;
+  const topBand = Math.max(viewH * 0.16,topInset+12);
   const bottomBand = viewH - controlsH - 28;
   const inComfort = rect.top >= topBand && rect.bottom <= bottomBand;
   if (!force && inComfort) return;
 
-  const desiredTop = viewH * 0.28;
+  const desiredTop = Math.max(topBand+8,viewH * 0.28);
   const delta = rect.top - desiredTop;
   if (Math.abs(delta) > 10) {
     window.scrollBy({ top: delta, behavior: force ? 'auto' : 'smooth' });
@@ -4470,6 +4557,7 @@ seek.addEventListener('click', () => { if (browsing) exitBrowse(); });
     readerUI('readerShade').hidden = !open || innerWidth >= 900;
     document.body.classList.toggle('reader-nav-open', open);
     readerUI('readerNavToggle').setAttribute('aria-expanded', String(open));
+    requestAnimationFrame(()=>{syncReaderChromeInsets();markShortMushafLines();});
   }
   function readerNav() {
     const list = readerUI('readerNavList');
@@ -4736,6 +4824,22 @@ seek.addEventListener('click', () => { if (browsing) exitBrowse(); });
   readerUI('readerReadingMode').setAttribute('aria-pressed',String(readerPresentation==='reading'));
   readerUI('readerGlossToggle').hidden=readerPresentation!=='translation';
 
+// Refit when webfonts finish and when either fixed toolbar changes height.
+syncReaderChromeInsets();
+if(document.fonts){
+  document.fonts.ready.then(markShortMushafLines);
+  document.fonts.addEventListener?.('loadingdone',markShortMushafLines);
+}
+if(typeof ResizeObserver==='function'){
+  const chromeObserver=new ResizeObserver(syncReaderChromeInsets);
+  for(const el of [document.getElementById('readerHeader'),document.getElementById('readerModeBar'),controlsEl])if(el)chromeObserver.observe(el);
+  let lastReaderWidth=0;
+  const fitObserver=new ResizeObserver(entries=>{
+    const width=entries[0]?.contentRect.width||0;
+    if(width!==lastReaderWidth){lastReaderWidth=width;requestAnimationFrame(markShortMushafLines);}
+  });
+  fitObserver.observe(mushafPagesEl);
+}
 // init — probe optional Al-Hadr pack, resume last read when possible
 (async () => {
   const bootHint = document.getElementById('bootHint');
