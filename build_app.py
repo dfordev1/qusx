@@ -1964,6 +1964,7 @@ function seekToWordMs(absMs, verseIdx, autoplay) {
     saveResumeState();
   };
   if(!ready){
+    if(currentAudioKey!==v.audio)audio.dataset.audioTriedUrls='';
     audio.pause();
     currentAudioKey=v.audio;
     audio.addEventListener('loadedmetadata',apply,{once:true});
@@ -2231,7 +2232,7 @@ const infoName = document.getElementById('infoName');
 
 // Local juz 404 → Archive.org; ogg 404 → opus/mp3 (juz 22+ on IA are opus-only).
 audio.addEventListener('error', () => {
-  if (!isLocalReciter() || !LOCAL_MANIFEST) return;
+  if(!isLocalReciter()||!LOCAL_MANIFEST){cancelPendingAudioSeek();clearHighlights();loadStatusEl.textContent='Recitation audio unavailable. Select another reciter or retry Play.';loadStatusEl.classList.add('error');return;}
   const v = VERSES[currentVerseIdx] || VERSES[0];
   if (!v) return;
   const from = currentAudioKey || v.audio;
@@ -2241,6 +2242,7 @@ audio.addEventListener('error', () => {
   const next = nextAudioFallback(from, triedSet);
   if (!next) {
     if (loadStatusEl) {
+      cancelPendingAudioSeek();clearHighlights();
       loadStatusEl.textContent = 'Audio failed to load for this juz';
       loadStatusEl.classList.add('error');
     }
@@ -2258,8 +2260,11 @@ audio.addEventListener('error', () => {
   }
   const idx = currentVerseIdx || 0;
   const resumePlay=pendingAudioSeek?pendingAudioSeek.autoplay:!audio.paused;
+  const resumeMs=pendingAudioSeek?.ms??(audio.currentTime*1000);
   cancelPendingAudioSeek();
-  seekVerseStart(idx,resumePlay);
+  const target=VERSES[idx];
+  const start=Number(target.source_offset_ms),end=start+Number(target.duration_ms);
+  seekToWordMs(resumeMs>=start&&resumeMs<end?resumeMs:start,idx,resumePlay);
 });
 
 let browseMode = 'surah'; // 'surah' | 'juz'
@@ -2370,7 +2375,11 @@ function seekToFirstVerseOnVisiblePage(autoplay) {
   if (!first) return;
   const s = +first.dataset.surah, a = +first.dataset.ayah;
   const vi = VERSES.findIndex(v => v.surah === s && v.ayah === a);
-  if (vi >= 0) jumpToVerse(vi, !!autoplay);
+  if(vi>=0){
+    const v=VERSES[vi],wi=Number(first.dataset.word);
+    const row=(v.words||[]).find(r=>r[0]===wi);
+    seekToWordMs(Number(v.source_offset_ms)+(row?Number(row[1]):0),vi,!!autoplay);
+  }
 }
 
 let pageNavBusy = false;
@@ -2416,26 +2425,29 @@ async function goMushafPage(delta) {
   }
 }
 
-function pageIndexForVerse(idx) {
-  const v = VERSES[idx];
-  if (!v) return 0;
-  const pages = mushafPagesEl.querySelectorAll('.mushaf-page');
-  for (let i = 0; i < pages.length; i++) {
-    if (pages[i].querySelector(verseDomScope(v))) return i;
+function pageIndexForVerse(idx,wordIdx){
+  const v=VERSES[idx];if(!v)return 0;
+  const pages=mushafPagesEl.querySelectorAll('.mushaf-page');
+  const scope=verseDomScope(v);
+  if(wordIdx!=null){
+    for(let i=0;i<pages.length;i++)if(pages[i].querySelector('.word'+scope+'[data-word="'+wordIdx+'"]'))return i;
   }
-  // Fallback: match by Madani page number stamped on the shell.
-  if (v.page != null) {
-    for (let i = 0; i < pages.length; i++) {
-      if (String(pages[i].dataset.pageNum) === String(v.page)) return i;
-    }
-  }
+  // Keep a visible page if the current ayah crosses a page boundary and
+  // there is no timed word yet. Otherwise use the first page of the ayah.
+  if(pages[currentPageIdx]?.querySelector('.word'+scope))return currentPageIdx;
+  for(let i=0;i<pages.length;i++)if(pages[i].querySelector('.word'+scope))return i;
+  if(v.page!=null)for(let i=0;i<pages.length;i++)if(String(pages[i].dataset.pageNum)===String(v.page))return i;
   return currentPageIdx;
 }
-
-function syncPageToVerse(idx) {
-  if(readerPresentation==='translation')return;
-  if (pageViewMode !== 'page') return;
-  const pi=pageIndexForVerse(idx);
+function readerActiveWordForVerse(v){
+  if(pendingAudioSeek?.verse===v)return activeWordAtMs(v,pendingAudioSeek.ms)??1;
+  if(v.audio!==currentAudioKey||!readerAudioMatches(v.audio))return null;
+  return activeWordAtMs(v,audio.currentTime*1000);
+}
+function syncPageToVerse(idx){
+  if(readerPresentation==='translation'||pageViewMode!=='page')return;
+  const v=VERSES[idx];if(!v)return;
+  const pi=pageIndexForVerse(idx,readerActiveWordForVerse(v));
   const pages=mushafPagesEl.querySelectorAll('.mushaf-page');
   if(pi!==currentPageIdx||!pages[pi]?.classList.contains('is-visible')){showMushafPage(pi);lastScrollKey='';}
 }
@@ -3037,6 +3049,25 @@ function buildMushafPlainSpan(v, wIdx, wordText, wordStart, verseIdx) {
   return gSpan;
 }
 
+function readerGroupWordPages(verses){
+  const groups=[];
+  for(const v of verses){
+    const count=(v.qusxWords||[]).length;
+    if(!count)continue;
+    for(let wi=1;wi<=count;wi++){
+      const page=v.wordPages?.[wi-1]??v.page;
+      let g=groups[groups.length-1];
+      if(!g||g.page!==page){g={page,verses:[],segments:[]};groups.push(g);}
+      let segment=g.segments[g.segments.length-1];
+      if(!segment||segment.v!==v){segment={v,from:wi,to:wi};g.segments.push(segment);g.verses.push(v);}
+      else segment.to=wi;
+    }
+  }
+  return groups;
+}
+function readerPageNumbers(verses){
+  return [...new Set(verses.flatMap(v=>[v.page,...(v.wordPages||[])]).filter(Boolean))];
+}
 function renderMushafPages() {
   if(readerPresentation==='translation'){renderVerseReader();return;}
   readerStopGloss();
@@ -3049,15 +3080,7 @@ function renderMushafPages() {
   hydrateSimpleTextForVisibleVerses();
   const sMeta = SURAH_INDEX.find(x => x.num === currentSurah);
 
-  const pageGroups = [];
-  for (const v of VERSES) {
-    let g = pageGroups[pageGroups.length - 1];
-    if (!g || g.page !== v.page) {
-      g = { page: v.page, verses: [] };
-      pageGroups.push(g);
-    }
-    g.verses.push(v);
-  }
+  const pageGroups=readerGroupWordPages(VERSES);
 
   pageGroups.forEach((g, gi) => {
     const pageDiv = document.createElement('div');
@@ -3103,10 +3126,11 @@ function renderMushafPages() {
 
     let curLineNum = null;
     let lineDiv = null;
-    for (const v of g.verses) {
-      const verseIdx = VERSES.indexOf(v);
+    for(const segment of g.segments){
+      const v=segment.v;
+      const verseIdx=VERSES.indexOf(v);
       const vMeta = SURAH_INDEX.find(x => x.num === v.surah);
-      if (v.ayah === 1 && vMeta && vMeta.bismillahPre && v.surah !== 1 && !shownBismillah.has(v.surah)) {
+      if (segment.from===1 && v.ayah === 1 && vMeta && vMeta.bismillahPre && v.surah !== 1 && !shownBismillah.has(v.surah)) {
         shownBismillah.add(v.surah);
         const bismRows = v.basmalahWords;
         const b = document.createElement('div');
@@ -3151,7 +3175,7 @@ function renderMushafPages() {
       const wordTimeMs = new Map();
       for (const [wIdx, s] of (v.words || [])) wordTimeMs.set(wIdx, v.source_offset_ms + s);
 
-      for (let wIdx = 1; wIdx <= qusxWords.length; wIdx++) {
+      for(let wIdx=segment.from;wIdx<=segment.to;wIdx++){
         const thisLine = wordLines[wIdx - 1];
         if (!lineDiv || (thisLine != null && thisLine !== curLineNum)) {
           lineDiv = document.createElement('div');
@@ -3170,6 +3194,7 @@ function renderMushafPages() {
           if (gSpan) lineDiv.appendChild(gSpan);
         }
       }
+      if(segment.to!==qusxWords.length)continue;
       if (useGlyphs) {
         // The font's own trailing ayah-number glyph — the real mushaf's
         // ornamental end-of-verse marker, non-interactive (no audio of its
@@ -3204,7 +3229,7 @@ function renderMushafPages() {
   });
   mushafPageCount = pageGroups.length;
   // Keep the viewer on the page that matches the current ayah (or first page).
-  currentPageIdx = pageIndexForVerse(currentVerseIdx);
+  currentPageIdx=pageIndexForVerse(currentVerseIdx,VERSES[currentVerseIdx]?readerActiveWordForVerse(VERSES[currentVerseIdx]):null);
   applyPageViewMode();
   // Defer until fonts/glyphs have laid out so short-line detection is real.
   requestAnimationFrame(() => requestAnimationFrame(markShortMushafLines));
@@ -3445,7 +3470,7 @@ function parseQusxXml(xmlText) {
       ayahMeta[curAyah] = Object.assign({
         juz: curJuz, hizb: curHizb, rub: curRub, manzil: curManzil, page: curPage, ruku: curRuku,
         fragments: { juz: curJuzFrag, hizb: curHizbFrag, rub: curRubFrag, manzil: curManzilFrag, ruku: curRukuFrag },
-        words: [], wordIds: [], wordLines: [],
+        words: [], wordIds: [], wordLines: [], wordPages: [],
       }, ayahMeta[curAyah] || {});
     } else if (tag === 'word' && curAyah) {
       if (el.getAttribute('type') !== 'number') {
@@ -3453,6 +3478,7 @@ function parseQusxXml(xmlText) {
         ayahMeta[curAyah].words.push(el.textContent);
         ayahMeta[curAyah].wordIds.push(el.getAttribute('id'));
         ayahMeta[curAyah].wordLines.push(curLine);
+        ayahMeta[curAyah].wordPages.push(curPage);
         const pos = +el.getAttribute('position');
         newMorph[curAyah + ':' + pos] = {
           id: el.getAttribute('id'),
@@ -3508,7 +3534,7 @@ function buildLocalVerse(r, metaA, surahNumForBismillah) {
     basmalahWords: remapped.basmalahWords,
     juz: metaA.juz, hizb: metaA.hizb, rub: metaA.rub, manzil: metaA.manzil, page: metaA.page, ruku: metaA.ruku, sajda: metaA.sajda,
     fragments: metaA.fragments || {},
-    wordLines: metaA.wordLines || [],
+    wordLines: metaA.wordLines || [], wordPages: metaA.wordPages || [],
     localJuz: r.juz,
   };
 }
@@ -3602,7 +3628,7 @@ async function loadJuz(juzNum, opts) {
 
     const profile = layoutProfile();
     if (profile.kind === 'glyph') {
-      const pages = [...new Set(VERSES.map(v => v.page).filter(Boolean))];
+      const pages = readerPageNumbers(VERSES);
       const useV4 = tajweedOn || profile.tajweedForced;
       const edition = profile.pageFont === 'v1' ? 'v1' : (useV4 ? 'v4' : 'v2');
       Promise.all(pages.map(p => ensurePageFont(edition, p))).then(() => {
@@ -3656,45 +3682,13 @@ function findVerseIdx(surah, ayah) {
   return VERSES.findIndex(v => v.surah === +surah && v.ayah === +ayah);
 }
 
-function finalizeLoadPosition(opts) {
-  opts = opts || {};
-  if (opts.openPage === 'last') {
-    showMushafPage(Math.max(0, mushafPageCount - 1));
-    seekToFirstVerseOnVisiblePage(false);
-  } else if (opts.openPage === 'first') {
-    showMushafPage(0);
-    seekToFirstVerseOnVisiblePage(false);
-  } else if (opts.resumeSurah != null && opts.resumeAyah != null) {
-    const vi = findVerseIdx(opts.resumeSurah, opts.resumeAyah);
-    if (vi >= 0) {
-      currentVerseIdx = vi;
-      const v = VERSES[vi];
-      const t = Number.isFinite(opts.resumeAt) ? opts.resumeAt : (v.source_offset_ms / 1000);
-      const apply = () => {
-        try { audio.currentTime = t; } catch (_) {}
-        refreshScrubber(vi);
-        refreshInfoBar(vi);
-        updateHighlight();
-        scrollToPlayback(vi, true);
-      };
-      if (audioIsReadyFor(v.audio)) {
-        apply();
-      } else {
-        currentAudioKey = v.audio;
-        audio.addEventListener('loadedmetadata', apply, { once: true });
-        audio.src = v.audio;
-        audio.load();
-      }
-    } else {
-      currentVerseIdx = verseAtMs(audio.currentTime * 1000);
-      refreshScrubber(currentVerseIdx);
-      refreshInfoBar(currentVerseIdx);
-      scrollToPlayback(currentVerseIdx, true);
-      updateHighlight();
-    }
+function finalizeLoadPosition(opts){
+  if(opts.openPage==='last') {
+    showMushafPage(Math.max(0,mushafPageCount-1));seekToFirstVerseOnVisiblePage(false);
+  }else if(opts.openPage==='first'){
+    showMushafPage(0);seekToFirstVerseOnVisiblePage(false);
   }
-  refreshPageNavButtons();
-  saveResumeState();
+  refreshPageNavButtons();saveResumeState();
 }
 
 const RESUME_KEY = 'quran-last-read';
@@ -3831,7 +3825,7 @@ async function loadSurah(num, opts) {
           letters: r.letter_timestamps,
           juz: metaA.juz, hizb: metaA.hizb, rub: metaA.rub, manzil: metaA.manzil, page: metaA.page, ruku: metaA.ruku, sajda: metaA.sajda,
           fragments: metaA.fragments || {},
-          wordLines: metaA.wordLines || [],
+          wordLines: metaA.wordLines || [], wordPages: metaA.wordPages || [],
         };
       });
     }
@@ -3859,7 +3853,7 @@ async function loadSurah(num, opts) {
     // Preload mushaf fonts in the background — never block Fatiha→Baqarah handoff.
     const profile = layoutProfile();
     if (profile.kind === 'glyph') {
-      const pages = [...new Set(VERSES.map(v => v.page).filter(Boolean))];
+      const pages = readerPageNumbers(VERSES);
       const useV4 = tajweedOn || profile.tajweedForced;
       const edition = profile.pageFont === 'v1' ? 'v1' : (useV4 ? 'v4' : 'v2');
       Promise.all(pages.map(p => ensurePageFont(edition, p))).then(() => {
@@ -3908,43 +3902,7 @@ async function advanceToNextLocalSurah() {
   }
 }
 
-function maybeAdvanceLocalSurahByTime() {
-  if (!isLocalReciter() || audio.paused || surahAdvanceBusy || !LOCAL_MANIFEST) return;
-  if (!VERSES.length) return;
-  const ms = audio.currentTime * 1000;
 
-  if (browseMode === 'juz') {
-    const last = VERSES[VERSES.length - 1];
-    const endMs = last.source_offset_ms + last.duration_ms;
-    if (ms + 200 < endMs) return;
-    if (nextLocalJuz(currentJuz || 0) == null) return;
-    advanceToNextLocalSurah();
-    return;
-  }
-
-  // CRITICAL: timestamps are file-relative per juz opus. Comparing
-  // juz-01 currentTime to Baqarah's last-ayah offset on juz-03 (~561s)
-  // falsely ended playback mid 2:61 (وَإِذْ قُلْتُمْ يَا مُوسَىٰ…).
-  // Only use the last ayah of THIS surah that lives on currentAudioKey.
-  let lastOnFileIdx = -1;
-  for (let i = VERSES.length - 1; i >= 0; i--) {
-    if (VERSES[i].audio === currentAudioKey) { lastOnFileIdx = i; break; }
-  }
-  if (lastOnFileIdx < 0) return;
-  const lastOnFile = VERSES[lastOnFileIdx];
-  const endMs = lastOnFile.source_offset_ms + lastOnFile.duration_ms;
-  if (ms + 200 < endMs) return;
-
-  // More of this surah on a later juz file → switch audio, stay on surah.
-  if (lastOnFileIdx < VERSES.length - 1) {
-    jumpToVerse(lastOnFileIdx + 1, true);
-    return;
-  }
-
-  // Finished every ayah of the loaded surah.
-  if (nextLocalSurah(currentSurah) == null) return;
-  advanceToNextLocalSurah();
-}
 
 // Numbering-only comparison against the pilot Warsh/Qalun/Ad-Duri/Shu'bah
 // traditions — see TRADITION_DIFFS above. Not a full alternate-tradition
@@ -3983,7 +3941,7 @@ function scrollToPlayback(idx, force) {
   if(readerPresentation==='translation' && force && idx===0 && audio.paused){window.scrollTo({top:0,behavior:'auto'});return;}
   if (!force && followScrollMode === 'off') return;
   const scope = verseDomScope(v);
-  const activeW = activeWordAtMs(v, audio.currentTime * 1000);
+  const activeW=readerActiveWordForVerse(v);
   // Never fall back to word 1 — that caused the highlight/viewport to jump
   // backward whenever there was a gap between word windows.
   let target = null;
@@ -3997,7 +3955,7 @@ function scrollToPlayback(idx, force) {
       document.querySelector('.mushaf-pages .mushaf-glyph' + scope);
   }
   const key = v.surah + ':' + v.ayah + ':' + (activeW != null ? activeW : (force ? 'force' : 'gap'));
-  if(!force && key===lastScrollKey && target && target.getBoundingClientRect().top>=0 && target.getBoundingClientRect().bottom<=innerHeight)return;
+
   // In gaps (no active word), do not scroll at all unless forced (verse jump).
   if (!force && activeW == null) return;
   if(!target)return;
@@ -4021,7 +3979,7 @@ function scrollToPlayback(idx, force) {
   const desiredTop = Math.max(topBand+8,viewH * 0.28);
   const delta = rect.top - desiredTop;
   if (Math.abs(delta) > 10) {
-    window.scrollBy({top:delta,behavior:force||innerWidth<900?'instant':'smooth'});
+    window.scrollBy({top:delta,behavior:force||innerWidth<900?'auto':'smooth'});
   }
 }
 
@@ -4200,7 +4158,8 @@ function updateHighlight() {
   const v = VERSES[currentVerseIdx];
   if (!v) return;
 
-  const activeWord = activeWordAtMs(v, ms);
+  const activeWord=activeWordAtMs(v,ms);
+  syncPageToVerse(currentVerseIdx);
   const scope = verseDomScope(v);
 
   // Timed basmalah header (local Al-Hadr, surahs with bismillahPre).
@@ -4277,7 +4236,7 @@ audio.addEventListener('pause', () => {
   scheduleChromeConceal();
 });
 audio.addEventListener('ended',()=>{
-  playBtn.innerHTML='&#9658;';saveResumeState();readerAdvancePlayback(true);
+  updateHighlight();playBtn.innerHTML='&#9658;';saveResumeState();readerAdvancePlayback(true);
 });
 audio.addEventListener('seeked',()=>{lastScrollKey='';updateHighlight();});
 audio.addEventListener('playing',()=>{lastScrollKey='';updateHighlight();});
@@ -4373,7 +4332,7 @@ tajweedBtn.addEventListener('click', async () => {
   tajweedOn = !tajweedOn;
   tajweedBtn.classList.toggle('on', tajweedOn);
   if (tajweedOn) {
-    const pages = [...new Set(VERSES.map(v => v.page).filter(Boolean))];
+    const pages = readerPageNumbers(VERSES);
     await Promise.all(pages.map(p => ensurePageFont('v4', p)));
   }
   renderMushafPages();
