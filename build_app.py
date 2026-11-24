@@ -1973,7 +1973,7 @@ function seekVerseStart(idx, autoplay) {
 function readerWordTapTarget(v,wIdx,verses){
   const idx=verses.indexOf(v);
   if(idx<0||!Number.isInteger(wIdx)||wIdx<1||wIdx>(v.qusxWords||[]).length)return null;
-  const rows=(v.words||[]).filter(w=>w[0]===wIdx&&readerContainsTime(v,Number(v.source_offset_ms)+Number(w[1]))).sort((a,b)=>a[1]-b[1]);
+  const rows=getWordWindows(v).filter(w=>w[0]===wIdx&&readerContainsTime(v,Number(v.source_offset_ms)+w[1]));
   return {idx,ms:v.alignmentVerified!==false&&rows.length?Number(v.source_offset_ms)+Number(rows[0][1]):Number(v.source_offset_ms)};
 }
 function handleWordTap(v, wIdx, verseIdx, absStart) {
@@ -1987,10 +1987,8 @@ function handleWordTap(v, wIdx, verseIdx, absStart) {
     return;
   }
 
-  // Standalone playback must use the measured word end. getWordWindows()
-  // deliberately fills pauses up to the next word for continuous highlighting,
-  // so using it here leaks audible audio from the following word.
-  const rows = [...(v.words || [])].sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+  // Standalone playback uses the same measured interval as highlighting.
+  const rows=getWordWindows(v);
   const rowIndex = rows.findIndex(row => row[0] === wIdx);
   const row = rowIndex >= 0 ? rows[rowIndex] : null;
   if(!row||v.alignmentVerified===false||!readerContainsTime(v,absStart)){seekVerseStart(verseIdx,true);return;}
@@ -2102,44 +2100,24 @@ function seekToWordMs(absMs,verseIdx,autoplay){
 // still keep the previous word highlighted (e.g. pause after ٱللَّهِ).
 // Also repair zero-duration ASR stamps (start===end) which otherwise never
 // satisfy `ms < end` and appear as missing mid-ayah highlights.
+// Keep measured word intervals, not guessed gap-fill windows.
 function getWordWindows(v) {
   if (v._wordWindows) return v._wordWindows;
-  const rows = [...(v.words || [])].sort((a, b) => a[1] - b[1] || a[0] - b[0]);
-  v._wordWindows = rows.map(([wIdx, s, e], i) => {
-    let end;
-    if (i + 1 < rows.length) {
-      end = rows[i + 1][1];
-    } else {
-      end = Math.max(e + 80, (v.duration_ms || e + 80));
-    }
-    // Zero-length or inverted window (common when ASR collapses a word).
-    if (!(end > s)) end = s + 80;
-    // Prefer the measured end when it sits inside the gap-to-next window.
-    if (e > s && e < end) {
-      // keep gap-fill to next word — stronger continuous highlight
-    }
-    return [wIdx, s, end];
-  });
+  const duration=Number(v.duration_ms);
+  v._wordWindows=(v.words||[]).filter(row=>Array.isArray(row)&&Number.isInteger(row[0])&&Number.isFinite(row[1])&&Number.isFinite(row[2])&&row[1]>=0&&row[2]>row[1]&&row[1]<duration).map(([w,s,e])=>[w,s,Math.min(e,duration)]).sort((a,b)=>a[1]-b[1]||a[0]-b[0]);
   return v._wordWindows;
 }
-
-function activeWordAtMs(v, ms) {
+function activeWordAtMs(v,ms){
   if(v.alignmentVerified===false||!readerContainsTime(v,ms))return null;
-  const rel = ms - Number(v.source_offset_ms);
-  const wins = getWordWindows(v);
-  for (const [wIdx, s, end] of wins) {
-    if (rel >= s && rel < end) return wIdx;
+  const rel=ms-Number(v.source_offset_ms);
+  // If measured words overlap, use the most recent onset. In silence,
+  // highlight no word instead of holding a stale word indefinitely.
+  let active=null;
+  for(const [w,s,e] of getWordWindows(v)){
+    if(s>rel)break;
+    if(rel<e)active=w;
   }
-  // Soft fallback: nearest prior word if we're inside the ayah span but
-  // between repaired windows (floating-point / trim edge).
-  if (rel >= 0 && rel <= (v.duration_ms || 0) + 50) {
-    let best = null;
-    for (const [wIdx, s, end] of wins) {
-      if (s <= rel) best = wIdx;
-    }
-    return best;
-  }
-  return null;
+  return active;
 }
 
 function ensureAudioForVerse(idx, autoplay) {
@@ -3694,17 +3672,8 @@ function parseQusxXml(xmlText) {
 }
 
 function repairWordTimestamps(words) {
-  // Expand zero-duration stamps so highlight windows are never empty.
-  const rows = [...(words || [])].sort((a, b) => a[1] - b[1] || a[0] - b[0]);
-  return rows.map((row, i) => {
-    const [wIdx, s, e] = row;
-    let end = e;
-    if (!(end > s)) {
-      end = (i + 1 < rows.length) ? Math.max(s + 40, rows[i + 1][1]) : s + 80;
-      if (!(end > s)) end = s + 80;
-    }
-    return [wIdx, s, end];
-  });
+  // Preserve source boundaries; a zero-length timestamp is not a measured word interval.
+  return [...(words||[])].sort((a,b)=>a[1]-b[1]||a[0]-b[0]);
 }
 
 function buildLocalVerse(r, metaA, surahNumForBismillah) {
@@ -4404,6 +4373,23 @@ function updateHighlight() {
   if(!audio.paused)readerAdvancePlayback(false);
 }
 
+// timeupdate may fire only about four times a second on mobile browsers.
+// Sample the media clock while playing; never extrapolate from wall time.
+let readerHighlightFrame=0,readerHighlightLastFrame=-Infinity;
+function readerStopHighlightClock(){
+  if(readerHighlightFrame)cancelAnimationFrame(readerHighlightFrame);
+  readerHighlightFrame=0;readerHighlightLastFrame=-Infinity;
+}
+function readerStartHighlightClock(){
+  if(readerHighlightFrame||audio.paused||document.hidden)return;
+  const tick=now=>{
+    readerHighlightFrame=0;
+    if(audio.paused||audio.ended||document.hidden)return;
+    if(now-readerHighlightLastFrame>=40){readerHighlightLastFrame=now;updateHighlight();}
+    if(!audio.paused&&!audio.ended&&!document.hidden&&!readerHighlightFrame)readerHighlightFrame=requestAnimationFrame(tick);
+  };
+  readerHighlightFrame=requestAnimationFrame(tick);
+}
 audio.addEventListener('timeupdate', () => {
   updateHighlight();
   if (audio.duration && !userSeeking) {
@@ -4420,17 +4406,19 @@ audio.addEventListener('play', () => {
   applyPlaybackSpeed(speedSelect ? speedSelect.value : (localStorage.getItem('quran-playback-speed') || '1'));
 });
 audio.addEventListener('pause', () => {
+  readerStopHighlightClock();updateHighlight();
   playBtn.innerHTML = '&#9658;';
   saveResumeState();
   scheduleChromeConceal();
 });
 audio.addEventListener('ended',()=>{
+  readerStopHighlightClock();
   const singleWord=!!tapFrameId;cancelTapWordStop();
   updateHighlight();playBtn.innerHTML='&#9658;';saveResumeState();if(!singleWord)readerAdvancePlayback(true);
 });
 audio.addEventListener('seeked',()=>{lastScrollKey='';updateHighlight();});
-audio.addEventListener('playing',()=>{lastScrollKey='';updateHighlight();});
-document.addEventListener('visibilitychange',()=>{if(!document.hidden){lastScrollKey='';updateHighlight();}});
+audio.addEventListener('playing',()=>{lastScrollKey='';updateHighlight();readerStartHighlightClock();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)readerStopHighlightClock();else{lastScrollKey='';updateHighlight();readerStartHighlightClock();}});
 
 window.addEventListener('beforeunload', saveResumeState);
 document.addEventListener('visibilitychange', () => {
