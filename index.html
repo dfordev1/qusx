@@ -1446,6 +1446,29 @@
     .reader-mode-tools select { max-width:100px; }
   }
 
+
+  /* Translation: keep each Quranic word as a single native shaping run.
+     Timing ranges are painted independently of the actual text nodes. */
+  .qv-arabic {
+    direction:rtl; text-align:right; text-align-last:right;
+    word-break:normal; overflow-wrap:normal; word-spacing:normal;
+    letter-spacing:normal; font-kerning:normal;
+    font-variant-ligatures:normal;
+    font-feature-settings:normal;
+    font-family:'Scheherazade New','Noto Naskh Arabic','Traditional Arabic',serif;
+  }
+  .qv-arabic .word {
+    display:inline; white-space:nowrap; padding:0; margin:0;
+    font:inherit; letter-spacing:normal; word-spacing:normal;
+    font-feature-settings:normal; font-variant-ligatures:normal;
+    unicode-bidi:normal;
+  }
+  .qv-gloss .word { display:block; text-align:center; }
+  ::highlight(qusx-timed-letter) { color:var(--accent); }
+  @media(max-width:899px){
+    .qv-arabic { padding-block:.35em .45em; line-height:max(var(--reader-leading),2.05); }
+  }
+
 </style>
 </head>
 <body>
@@ -2076,6 +2099,7 @@ function textFontIsNastaleeq() {
 let mode = 'letter'; // internal renderer: 'letter' | 'word' | 'mushaf'
 let readerPresentation=localStorage.getItem('qusx-presentation-v2')==='reading'?'reading':'translation';
 let readerGlossEnabled=false, readerGlossLanguage='en';
+const readerLetterRanges=new WeakMap();
 let experience = localStorage.getItem('quran-experience') || 'read';
 if (!['read', 'follow', 'explore'].includes(experience)) experience = 'read';
 let readingStyle = localStorage.getItem('quran-reading-style') || 'authentic';
@@ -4136,6 +4160,7 @@ function hideInspector() {
 wiCloseBtn.addEventListener('click', hideInspector);
 
 function clearHighlights() {
+  readerClearLetterRange();
   document.querySelectorAll('.letter.lit').forEach(el => el.classList.remove('lit'));
   document.querySelectorAll('.word.active-word').forEach(el => el.classList.remove('active-word'));
 }
@@ -4213,9 +4238,10 @@ function updateHighlight() {
     el.classList.toggle('active-word', ms >= s && ms < end);
   });
 
+  readerHighlightCurrentLetter(v,activeWord,ms);
   // Letter glow only in Letter mode (Word mode uses the boxed word highlight).
   document.querySelectorAll('.mushaf-pages .letter.lit').forEach(el => el.classList.remove('lit'));
-  if (mode === 'letter' && activeWord !== null) {
+  if (readerPresentation!=='translation' && mode === 'letter' && activeWord !== null) {
     document.querySelectorAll('.mushaf-pages .word' + scope + '[data-word="' + activeWord + '"]').forEach(wordEl => {
       const letters = [...wordEl.querySelectorAll('.letter:not(.mark-only)')];
       let cur = null;
@@ -4457,6 +4483,7 @@ const browseMetaEl = document.getElementById('browseMeta');
 const modeBrowseBtn = document.getElementById('modeBrowse');
 
 function enterBrowse() {
+  if(!flatLetters.length)return;
   browsing = true;
   audio.pause();
   browseBar.classList.add('on');
@@ -4469,6 +4496,7 @@ function exitBrowse() {
   modeBrowseBtn.classList.remove('on');
 }
 function showBrowseLetter(gidx) {
+  if(!flatLetters.length)return;
   browseIdx = Math.max(0, Math.min(flatLetters.length - 1, gidx));
   const L = flatLetters[browseIdx];
   browseLetterEl.textContent = L.char;
@@ -4480,6 +4508,11 @@ function showBrowseLetter(gidx) {
   if (cell) {
     cell.classList.add('lit');
     cell.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } else if(readerPresentation==='translation'){
+    for(const word of mushafPagesEl.querySelectorAll('.qv-arabic .word'+verseDomScope(L.verse))){
+      const match=(readerLetterRanges.get(word)||[]).find(r=>r.gidx===browseIdx);
+      if(match){readerPaintLetterRange(word,match);word.scrollIntoView({behavior:'smooth',block:'center'});break;}
+    }
   }
 
   audio.currentTime = L.startMs / 1000;
@@ -4712,8 +4745,66 @@ seek.addEventListener('click', () => { if (browsing) exitBrowse(); });
     });
     return wrap;
   }
+
+  // Mobile shaping: DOM boundaries between Arabic letters can break joining.
+  // Preserve one intact text node per canonical word and keep timing metadata
+  // outside that node. Range highlights do not introduce shaping boundaries.
+  function readerBuildShapedWord(v,wIdx,verseIdx){
+    const text=visualWordText(v,wIdx,(v.qusxWords||[])[wIdx-1]||'');
+    let word=v.letters?.word_idx?buildTimedWordSpan(v,wIdx,verseIdx):null;
+    if(!word){
+      word=readerEl('span','word');
+      word.dataset.word=wIdx;word.dataset.surah=v.surah;word.dataset.ayah=v.ayah;
+      const timing=(v.words||[]).find(row=>row[0]===wIdx);
+      if(timing){
+        const start=v.source_offset_ms+timing[1];
+        word.dataset.startMs=start;
+        word.addEventListener('click',e=>{e.stopPropagation();handleWordTap(v,wIdx,verseIdx,start);});
+      }
+      bindGrammarHandlers(word,morphFor(v,wIdx),v,wIdx);
+    }
+    let offset=0;
+    const ranges=[];
+    const letters=[...word.querySelectorAll('.letter:not(.mark-only)')];
+    // Build offsets against the exact displayed source. If an old letter
+    // renderer has hidden an orthographic mark, decline the range rather than
+    // modify Quran text or highlight an incorrect character.
+    if(letters.length&&letters.map(el=>el.textContent).join('')===text){
+      for(const el of letters){
+        const length=el.textContent.length;
+        if(length)ranges.push({from:offset,to:offset+length,start:Number(el.dataset.start),gidx:Number(el.dataset.gidx)});
+        offset+=length;
+      }
+    }
+    word.textContent=text;
+    word.lang='ar';word.dir='rtl';
+    if(ranges.length)readerLetterRanges.set(word,ranges);
+    return word;
+  }
+  function readerClearLetterRange(){
+    if(typeof CSS!=='undefined'&&CSS.highlights)CSS.highlights.delete('qusx-timed-letter');
+  }
+  function readerPaintLetterRange(word,entry){
+    if(!entry||!word?.firstChild||typeof Highlight!=='function'||typeof CSS==='undefined'||!CSS.highlights)return;
+    const node=word.firstChild;
+    if(node.nodeType!==3||entry.to>node.length)return;
+    const range=document.createRange();
+    range.setStart(node,entry.from);range.setEnd(node,entry.to);
+    CSS.highlights.set('qusx-timed-letter',new Highlight(range));
+  }
+  function readerHighlightCurrentLetter(v,activeWord,ms){
+    readerClearLetterRange();
+    if(readerPresentation!=='translation'||mode!=='letter'||activeWord==null)return;
+    const word=mushafPagesEl.querySelector('.qv-arabic .word'+verseDomScope(v)+'[data-word="'+activeWord+'"]');
+    if(!word)return;
+    const ranges=readerLetterRanges.get(word)||[];
+    let match=null;
+    for(const entry of ranges){if(ms>=entry.start)match=entry;else break;}
+    readerPaintLetterRange(word,match);
+  }
+
   function renderVerseReader(){
-    readerStopGloss();mushafPagesEl.replaceChildren();mushafPagesEl.classList.remove('page-mode');mushafPageCount=0;
+    readerStopGloss();readerClearLetterRange();mushafPagesEl.replaceChildren();mushafPagesEl.classList.remove('page-mode');mushafPageCount=0;
     if(pageNavEl)pageNavEl.classList.remove('visible');
     flatLetters=[];hydrateSimpleTextForVisibleVerses();
     const frag=document.createDocumentFragment();
@@ -4736,8 +4827,7 @@ seek.addEventListener('click', () => { if (browsing) exitBrowse(); });
       const content=readerEl('div','qv-content');
       const ar=readerEl('div','qv-arabic verse-text');ar.lang='ar';ar.dir='rtl';
       for(let wi=1;wi<=(v.qusxWords||[]).length;wi++){
-        let word=v.letters?.word_idx?buildTimedWordSpan(v,wi,i):null;
-        if(!word){word=readerEl('span','word',visualWordText(v,wi,v.qusxWords[wi-1]));word.dataset.word=wi;word.dataset.surah=v.surah;word.dataset.ayah=v.ayah;}
+        const word=readerBuildShapedWord(v,wi,i);
         ar.append(readerGlossEnabled?readerGlossWord(v,wi,word):word,document.createTextNode(' '));
       }
       if(!(v.qusxWords||[]).length)ar.append(document.createTextNode(v.text||''));
