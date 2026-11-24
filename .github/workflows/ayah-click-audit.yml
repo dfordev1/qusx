@@ -1,0 +1,23 @@
+name: Ayah click alignment audit
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tests/audit-ayah-click.cjs'
+      - 'build_app.py'
+      - 'index.html'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node tests/timing-regression.cjs
+      - run: |
+          curl --fail --location --retry 3 --max-time 60 https://raw.githubusercontent.com/dfordev1/usxv2/main/output/madani-v2/002.qusx.xml -o /tmp/baqarah.qusx.xml
+          node tests/audit-ayah-click.cjs /tmp/baqarah.qusx.xml
