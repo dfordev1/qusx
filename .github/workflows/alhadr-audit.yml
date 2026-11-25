@@ -1,0 +1,42 @@
+name: Al-Hadr recording duration audit
+on:
+  pull_request:
+    paths:
+      - 'local_alhadr/manifest.json'
+      - 'tests/audit_alhadr_audio.py'
+      - '.github/workflows/alhadr-audit.yml'
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: 'Audit all aligned juz or only juz 1–3'
+        type: choice
+        options:
+          - first-three
+          - all
+        default: first-three
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure ffprobe
+        run: |
+          command -v ffprobe || (sudo apt-get update && sudo apt-get install -y ffmpeg)
+      - name: Audit recordings
+        env:
+          AUDIT_SCOPE: ${{ inputs.scope }}
+        run: |
+          if [ "$AUDIT_SCOPE" = all ]; then
+            python3 tests/audit_alhadr_audio.py
+          else
+            python3 tests/audit_alhadr_audio.py --juz 1 2 3
+          fi
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alhadr-duration-report
+          path: alhadr-audit.json
